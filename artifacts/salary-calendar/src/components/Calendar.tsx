@@ -21,7 +21,13 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { useSalaryStore, type Currency } from "@/lib/store";
+import {
+  useSalaryStore,
+  type Currency,
+  type JobId,
+  JOBS,
+  dayTotal,
+} from "@/lib/store";
 import { cn } from "@/lib/utils";
 
 const CURRENCIES: { code: Currency; symbol: string }[] = [
@@ -105,18 +111,64 @@ function TileLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
+function NumericInput({
+  value,
+  onChange,
+  autoFocus,
+  placeholder,
+  onSubmit,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  autoFocus?: boolean;
+  placeholder?: string;
+  onSubmit?: () => void;
+}) {
+  return (
+    <input
+      autoFocus={autoFocus}
+      inputMode="numeric"
+      pattern="[0-9]*"
+      placeholder={placeholder}
+      value={value}
+      onChange={(e) => {
+        const cleaned = e.target.value.replace(/\D/g, "");
+        onChange(cleaned.replace(/^0+(?=\d)/, ""));
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          onSubmit?.();
+          return;
+        }
+        const allowed = [
+          "Backspace", "Delete", "ArrowLeft", "ArrowRight",
+          "Tab", "Home", "End",
+        ];
+        if (allowed.includes(e.key)) return;
+        if (e.metaKey || e.ctrlKey) return;
+        if (!/^[0-9]$/.test(e.key)) e.preventDefault();
+      }}
+      className="w-full h-8 px-2.5 text-sm tabular-nums font-mono bg-background border border-border rounded-md focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary"
+    />
+  );
+}
+
 export default function Calendar() {
   const {
     entries,
     currency,
     setCurrency,
-    setEntryInCurrency,
+    setDayEntries,
     convert,
   } = useSalaryStore();
 
   const [currentDate, setCurrentDate] = useState(new Date());
   const [openKey, setOpenKey] = useState<string | null>(null);
-  const [editValue, setEditValue] = useState("");
+  const [editValues, setEditValues] = useState<Record<JobId, string>>({
+    ozon: "",
+    dostaevsky: "",
+  });
   const [monthPickerOpen, setMonthPickerOpen] = useState(false);
   const [pickerYear, setPickerYear] = useState(() => new Date().getFullYear());
 
@@ -140,11 +192,16 @@ export default function Calendar() {
     return w;
   }, [days]);
 
-  const getDayRub = (date: Date) =>
-    entries[format(date, "yyyy-MM-dd")] || 0;
-
+  const getDayEntry = (date: Date) => entries[format(date, "yyyy-MM-dd")];
+  const getDayRub = (date: Date) => dayTotal(getDayEntry(date));
   const getDayInDisplay = (date: Date) =>
     convert(getDayRub(date), "RUB", currency);
+
+  const getJobsWorked = (date: Date): JobId[] => {
+    const entry = getDayEntry(date);
+    if (!entry) return [];
+    return JOBS.filter((j) => (entry[j.id] ?? 0) > 0).map((j) => j.id);
+  };
 
   const getWeekTotal = (weekDays: Date[]) =>
     weekDays
@@ -175,18 +232,34 @@ export default function Calendar() {
     return best;
   }, [monthDays, entries, currency, convert]);
 
+  // Per-job monthly totals for the sidebar breakdown
+  const perJobMonthTotal = useMemo(() => {
+    const totals: Record<JobId, number> = { ozon: 0, dostaevsky: 0 };
+    for (const d of monthDays) {
+      const entry = getDayEntry(d);
+      if (!entry) continue;
+      for (const job of JOBS) {
+        const v = entry[job.id];
+        if (typeof v === "number") {
+          totals[job.id] += convert(v, "RUB", currency);
+        }
+      }
+    }
+    return totals;
+  }, [monthDays, entries, currency, convert]);
+
   const handleSave = (date: Date) => {
-    const num = parseInt(editValue, 10);
-    setEntryInCurrency(
-      format(date, "yyyy-MM-dd"),
-      Number.isFinite(num) ? num : 0,
-      currency,
-    );
+    const amounts: Partial<Record<JobId, number>> = {};
+    for (const job of JOBS) {
+      const num = parseInt(editValues[job.id] || "0", 10);
+      if (Number.isFinite(num) && num > 0) amounts[job.id] = num;
+    }
+    setDayEntries(format(date, "yyyy-MM-dd"), amounts, currency);
     setOpenKey(null);
   };
 
   const handleClear = (date: Date) => {
-    setEntryInCurrency(format(date, "yyyy-MM-dd"), 0, currency);
+    setDayEntries(format(date, "yyyy-MM-dd"), {}, currency);
     setOpenKey(null);
   };
 
@@ -209,7 +282,7 @@ export default function Calendar() {
           gridTemplateRows: "auto minmax(0, 1fr) auto",
         }}
       >
-        {/* Header bar — spans full width */}
+        {/* Header bar */}
         <header className="col-span-2 rounded-2xl border border-border bg-card flex items-center justify-between px-4 py-2.5 min-h-0">
           <div className="flex items-baseline gap-3">
             <span className="text-[10px] uppercase tracking-[0.3em] text-muted-foreground">
@@ -290,6 +363,7 @@ export default function Calendar() {
               </PopoverContent>
             </Popover>
           </div>
+
           <div className="flex items-center gap-1.5">
             <button
               onClick={() => setCurrentDate(subMonths(currentDate, 1))}
@@ -334,7 +408,6 @@ export default function Calendar() {
 
         {/* Calendar tile */}
         <Tile>
-          {/* Weekday labels */}
           <div className="grid grid-cols-7 border-b border-border shrink-0">
             {WEEKDAYS.map((day, i) => (
               <div
@@ -351,7 +424,6 @@ export default function Calendar() {
             ))}
           </div>
 
-          {/* Weeks */}
           <div
             className="flex-1 grid min-h-0"
             style={{
@@ -374,6 +446,7 @@ export default function Calendar() {
                     const amtRub = getDayRub(day);
                     const amtDisplay = getDayInDisplay(day);
                     const hasEntry = amtRub > 0;
+                    const jobsWorked = getJobsWorked(day);
                     const key = format(day, "yyyy-MM-dd");
                     const isOpen = openKey === key;
                     const weekend = isWeekend(day);
@@ -386,10 +459,23 @@ export default function Calendar() {
                         onOpenChange={(open) => {
                           if (open) {
                             setOpenKey(key);
-                            const displayValue = isCurrentMonth && hasEntry
-                              ? Math.round(amtDisplay)
-                              : 0;
-                            setEditValue(displayValue ? String(displayValue) : "");
+                            const entry = getDayEntry(day);
+                            const next: Record<JobId, string> = {
+                              ozon: "",
+                              dostaevsky: "",
+                            };
+                            if (entry && isCurrentMonth) {
+                              for (const job of JOBS) {
+                                const v = entry[job.id];
+                                if (typeof v === "number" && v > 0) {
+                                  const inDisplay = Math.round(
+                                    convert(v, "RUB", currency),
+                                  );
+                                  next[job.id] = String(inDisplay);
+                                }
+                              }
+                            }
+                            setEditValues(next);
                           } else if (isOpen) {
                             setOpenKey(null);
                           }
@@ -401,18 +487,13 @@ export default function Calendar() {
                               "flex flex-col items-stretch justify-between text-left transition-colors outline-none relative min-h-0 px-2 py-1.5 group",
                               !isLastCol && "border-r border-border",
                               !isCurrentMonth && "bg-background/40",
-                              isCurrentMonth && weekend && !hasEntry && "bg-muted/20",
-                              isCurrentMonth && hasEntry && "bg-foreground/[0.06]",
-                              isCurrentMonth && "hover:bg-muted/60",
+                              isCurrentMonth && weekend && !hasEntry && "bg-muted/15",
+                              isCurrentMonth && hasEntry && "bg-foreground/[0.025]",
+                              isCurrentMonth && "hover:bg-muted/40",
                               "focus-visible:ring-1 focus-visible:ring-primary focus-visible:ring-inset",
                             )}
                           >
-                            {/* Subtle accent stripe for days with entries */}
-                            {hasEntry && isCurrentMonth && (
-                              <span className="absolute top-0 left-0 right-0 h-px bg-foreground/40" />
-                            )}
-
-                            <div className="flex items-center justify-between">
+                            <div className="flex items-center justify-between gap-1">
                               <span
                                 className={cn(
                                   "text-[11px] font-medium tabular-nums tracking-tight",
@@ -425,8 +506,29 @@ export default function Calendar() {
                               >
                                 {format(day, "dd")}
                               </span>
-                              {hasEntry && isCurrentMonth && !isToday && (
-                                <span className="w-1 h-1 rounded-full bg-foreground/60" />
+
+                              {/* Job tag markers */}
+                              {hasEntry && isCurrentMonth && (
+                                <div className="flex items-center gap-0.5">
+                                  {JOBS.map((job) => {
+                                    const isOn = jobsWorked.includes(job.id);
+                                    if (!isOn) return null;
+                                    return (
+                                      <span
+                                        key={job.id}
+                                        title={job.label}
+                                        className={cn(
+                                          "w-3.5 h-3.5 inline-flex items-center justify-center rounded-sm text-[8px] font-bold uppercase tracking-tight leading-none",
+                                          job.id === "ozon"
+                                            ? "bg-foreground/80 text-background"
+                                            : "border border-foreground/60 text-foreground/80",
+                                        )}
+                                      >
+                                        {job.short}
+                                      </span>
+                                    );
+                                  })}
+                                </div>
                               )}
                             </div>
 
@@ -444,11 +546,11 @@ export default function Calendar() {
                           </button>
                         </PopoverTrigger>
                         <PopoverContent
-                          className="w-60 p-3"
+                          className="w-[260px] p-3"
                           align="center"
                           sideOffset={4}
                         >
-                          <div className="space-y-2.5">
+                          <div className="space-y-3">
                             <div className="flex items-center justify-between">
                               <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
                                 {format(day, "d MMMM yyyy", { locale: ru })}
@@ -457,52 +559,67 @@ export default function Calendar() {
                                 {currency}
                               </span>
                             </div>
+
                             <form
                               onSubmit={(e) => {
                                 e.preventDefault();
                                 handleSave(day);
                               }}
-                              className="flex gap-2"
+                              className="space-y-2"
                             >
-                              <input
-                                autoFocus
-                                inputMode="numeric"
-                                pattern="[0-9]*"
-                                placeholder="0"
-                                value={editValue}
-                                onChange={(e) => {
-                                  const cleaned = e.target.value.replace(/\D/g, "");
-                                  setEditValue(cleaned.replace(/^0+(?=\d)/, ""));
-                                }}
-                                onKeyDown={(e) => {
-                                  const allowed = [
-                                    "Backspace", "Delete", "ArrowLeft", "ArrowRight",
-                                    "Tab", "Home", "End", "Enter",
-                                  ];
-                                  if (allowed.includes(e.key)) return;
-                                  if (e.metaKey || e.ctrlKey) return;
-                                  if (!/^[0-9]$/.test(e.key)) {
-                                    e.preventDefault();
-                                  }
-                                }}
-                                className="flex-1 h-8 px-2.5 text-sm tabular-nums font-mono bg-background border border-border rounded-md focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary"
-                              />
-                              <button
-                                type="submit"
-                                className="h-8 px-3 text-xs font-medium uppercase tracking-[0.15em] bg-primary text-primary-foreground rounded-md hover:opacity-90"
-                              >
-                                ок
-                              </button>
+                              {JOBS.map((job, idx) => (
+                                <div
+                                  key={job.id}
+                                  className="flex items-center gap-2"
+                                >
+                                  <span
+                                    className={cn(
+                                      "shrink-0 w-5 h-5 inline-flex items-center justify-center rounded-sm text-[10px] font-bold uppercase",
+                                      job.id === "ozon"
+                                        ? "bg-foreground/80 text-background"
+                                        : "border border-foreground/60 text-foreground/80",
+                                    )}
+                                  >
+                                    {job.short}
+                                  </span>
+                                  <span className="text-[11px] tracking-[0.05em] text-muted-foreground w-[88px] truncate">
+                                    {job.label}
+                                  </span>
+                                  <NumericInput
+                                    autoFocus={idx === 0}
+                                    placeholder="0"
+                                    value={editValues[job.id]}
+                                    onChange={(v) =>
+                                      setEditValues((prev) => ({
+                                        ...prev,
+                                        [job.id]: v,
+                                      }))
+                                    }
+                                    onSubmit={() => handleSave(day)}
+                                  />
+                                </div>
+                              ))}
+
+                              <div className="flex items-center justify-between gap-2 pt-1">
+                                {hasEntry ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleClear(day)}
+                                    className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground hover:text-destructive transition-colors"
+                                  >
+                                    удалить
+                                  </button>
+                                ) : (
+                                  <span />
+                                )}
+                                <button
+                                  type="submit"
+                                  className="h-8 px-4 text-xs font-medium uppercase tracking-[0.15em] bg-primary text-primary-foreground rounded-md hover:opacity-90"
+                                >
+                                  сохранить
+                                </button>
+                              </div>
                             </form>
-                            {hasEntry && (
-                              <button
-                                type="button"
-                                onClick={() => handleClear(day)}
-                                className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground hover:text-destructive transition-colors"
-                              >
-                                удалить
-                              </button>
-                            )}
                           </div>
                         </PopoverContent>
                       </Popover>
@@ -514,8 +631,11 @@ export default function Calendar() {
           </div>
         </Tile>
 
-        {/* Right column: total + weeks */}
-        <div className="grid gap-3 min-h-0" style={{ gridTemplateRows: "auto minmax(0, 1fr)" }}>
+        {/* Right column: total + per-job + weeks */}
+        <div
+          className="grid gap-3 min-h-0"
+          style={{ gridTemplateRows: "auto auto minmax(0, 1fr)" }}
+        >
           {/* Total tile */}
           <Tile className="p-4">
             <TileLabel>итого</TileLabel>
@@ -526,6 +646,41 @@ export default function Calendar() {
               [{daysWithEntries.toString().padStart(2, "0")}/
               {monthDays.length.toString().padStart(2, "0")}] дней
             </div>
+          </Tile>
+
+          {/* Per-job breakdown */}
+          <Tile>
+            <div className="px-4 py-2 border-b border-border shrink-0">
+              <TileLabel>по работам</TileLabel>
+            </div>
+            <ul className="divide-y divide-border">
+              {JOBS.map((job) => (
+                <li
+                  key={job.id}
+                  className="flex items-center justify-between px-4 py-2"
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span
+                      className={cn(
+                        "shrink-0 w-4 h-4 inline-flex items-center justify-center rounded-sm text-[9px] font-bold uppercase",
+                        job.id === "ozon"
+                          ? "bg-foreground/80 text-background"
+                          : "border border-foreground/60 text-foreground/80",
+                      )}
+                    >
+                      {job.short}
+                    </span>
+                    <span className="text-[11px] truncate">{job.label}</span>
+                  </div>
+                  <span className="text-xs font-semibold tabular-nums">
+                    <MoneyTicker
+                      value={perJobMonthTotal[job.id]}
+                      currency={currency}
+                    />
+                  </span>
+                </li>
+              ))}
+            </ul>
           </Tile>
 
           {/* Weeks tile */}
@@ -548,7 +703,7 @@ export default function Calendar() {
                 return (
                   <li
                     key={wi}
-                    className="flex items-center justify-between px-4 py-2.5"
+                    className="flex items-center justify-between px-4 py-2"
                   >
                     <div className="flex items-baseline gap-2">
                       <span className="text-[10px] text-muted-foreground tabular-nums">
@@ -568,7 +723,7 @@ export default function Calendar() {
           </Tile>
         </div>
 
-        {/* Bottom stats bar — spans full width */}
+        {/* Bottom stats bar */}
         <div className="col-span-2 grid grid-cols-3 gap-3 min-h-0">
           <Tile className="px-4 py-3">
             <TileLabel>среднее в день</TileLabel>

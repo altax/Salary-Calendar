@@ -1,11 +1,20 @@
 import { useState, useEffect, useCallback } from "react";
 
-const ENTRIES_KEY = "salary-calendar:entries:v2";
+const ENTRIES_V2_KEY = "salary-calendar:entries:v2";
+const ENTRIES_V3_KEY = "salary-calendar:entries:v3";
 const CURRENCY_KEY = "salary-calendar:currency:v2";
 const RATES_KEY = "salary-calendar:rates:v1";
 
-export type Entries = Record<string, number>;
 export type Currency = "RUB" | "USD" | "EUR";
+export type JobId = "ozon" | "dostaevsky";
+
+export type DayEntry = Partial<Record<JobId, number>>;
+export type Entries = Record<string, DayEntry>;
+
+export const JOBS: { id: JobId; short: string; label: string }[] = [
+  { id: "ozon", short: "о", label: "Озон ПВЗ" },
+  { id: "dostaevsky", short: "д", label: "Достаевский" },
+];
 
 const ALLOWED: Currency[] = ["RUB", "USD", "EUR"];
 
@@ -57,17 +66,35 @@ async function fetchRates(): Promise<Rates | null> {
   }
 }
 
-export function useSalaryStore() {
-  const [entries, setEntries] = useState<Entries>(() => {
-    try {
-      const stored =
-        localStorage.getItem(ENTRIES_KEY) ??
-        localStorage.getItem("salary-calendar:entries:v1");
-      return stored ? JSON.parse(stored) : {};
-    } catch {
-      return {};
+function loadEntries(): Entries {
+  try {
+    const v3 = localStorage.getItem(ENTRIES_V3_KEY);
+    if (v3) return JSON.parse(v3) as Entries;
+    const v2 = localStorage.getItem(ENTRIES_V2_KEY);
+    if (v2) {
+      const old = JSON.parse(v2) as Record<string, number>;
+      const migrated: Entries = {};
+      for (const [k, v] of Object.entries(old)) {
+        if (typeof v === "number" && v > 0) migrated[k] = { ozon: v };
+      }
+      return migrated;
     }
-  });
+  } catch {}
+  return {};
+}
+
+export function dayTotal(entry: DayEntry | undefined): number {
+  if (!entry) return 0;
+  let sum = 0;
+  for (const job of JOBS) {
+    const v = entry[job.id];
+    if (typeof v === "number") sum += v;
+  }
+  return sum;
+}
+
+export function useSalaryStore() {
+  const [entries, setEntries] = useState<Entries>(() => loadEntries());
 
   const [currency, setCurrencyState] = useState<Currency>(() => {
     const stored = localStorage.getItem(CURRENCY_KEY);
@@ -80,7 +107,7 @@ export function useSalaryStore() {
   const [rates, setRates] = useState<Rates>(() => loadCachedRates());
 
   useEffect(() => {
-    localStorage.setItem(ENTRIES_KEY, JSON.stringify(entries));
+    localStorage.setItem(ENTRIES_V3_KEY, JSON.stringify(entries));
   }, [entries]);
 
   useEffect(() => {
@@ -120,23 +147,28 @@ export function useSalaryStore() {
     [rates],
   );
 
-  const setEntryInCurrency = (
+  const setDayEntries = (
     dateIso: string,
-    amountInDisplayCurrency: number,
+    amountsInDisplay: Partial<Record<JobId, number>>,
     displayCurrency: Currency,
   ) => {
-    const amountInRub =
-      displayCurrency === "RUB"
-        ? amountInDisplayCurrency
-        : amountInDisplayCurrency / rates.values[displayCurrency];
+    const next: DayEntry = {};
+    for (const job of JOBS) {
+      const raw = amountsInDisplay[job.id];
+      if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0)
+        continue;
+      const inRub =
+        displayCurrency === "RUB" ? raw : raw / rates.values[displayCurrency];
+      next[job.id] = Math.round(inRub * 100) / 100;
+    }
     setEntries((prev) => {
-      const next = { ...prev };
-      if (!Number.isFinite(amountInRub) || amountInRub <= 0) {
-        delete next[dateIso];
+      const updated = { ...prev };
+      if (Object.keys(next).length === 0) {
+        delete updated[dateIso];
       } else {
-        next[dateIso] = Math.round(amountInRub * 100) / 100;
+        updated[dateIso] = next;
       }
-      return next;
+      return updated;
     });
   };
 
@@ -144,7 +176,7 @@ export function useSalaryStore() {
     entries,
     currency,
     setCurrency,
-    setEntryInCurrency,
+    setDayEntries,
     convert,
     rates,
   };
