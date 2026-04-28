@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo } from "react";
 import {
   format,
   startOfMonth,
@@ -42,12 +42,11 @@ const WEEKDAYS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
 
 const WEEK_OPTIONS = { weekStartsOn: 1 as const };
 
-function formatMoney(value: number, currency: string, opts?: Intl.NumberFormatOptions) {
+function formatMoney(value: number, currency: string) {
   return new Intl.NumberFormat("ru-RU", {
     style: "currency",
     currency,
     maximumFractionDigits: 0,
-    ...opts,
   }).format(value);
 }
 
@@ -56,9 +55,9 @@ function MoneyTicker({ value, currency }: { value: number; currency: string }) {
     <AnimatePresence mode="popLayout" initial={false}>
       <motion.span
         key={`${value}-${currency}`}
-        initial={{ opacity: 0, y: 6 }}
+        initial={{ opacity: 0, y: 4 }}
         animate={{ opacity: 1, y: 0 }}
-        exit={{ opacity: 0, y: -6 }}
+        exit={{ opacity: 0, y: -4 }}
         transition={{ duration: 0.18, ease: "easeOut" }}
         className="inline-block tabular-nums"
       >
@@ -139,45 +138,45 @@ export default function Calendar() {
     monthLabel.charAt(0).toUpperCase() + monthLabel.slice(1);
 
   return (
-    <div className="min-h-[100dvh] w-full bg-background text-foreground">
-      <div className="mx-auto max-w-6xl px-4 sm:px-8 py-8 sm:py-12">
+    <div className="h-[100dvh] w-full bg-background text-foreground overflow-hidden flex flex-col">
+      <div className="mx-auto w-full max-w-[1200px] px-4 sm:px-6 py-4 flex-1 flex flex-col min-h-0 gap-3">
         {/* Header */}
-        <header className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
-          <div>
-            <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground mb-1">
-              Календарь дохода
-            </p>
-            <h1 className="text-3xl sm:text-4xl font-semibold tracking-tight">
+        <header className="flex items-center justify-between gap-3 shrink-0">
+          <div className="flex items-baseline gap-3">
+            <h1 className="text-xl sm:text-2xl font-semibold tracking-tight">
               {monthLabelCapitalized}
             </h1>
+            <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground hidden sm:inline">
+              Календарь дохода
+            </span>
           </div>
 
           <div className="flex items-center gap-2">
-            <div className="flex items-center rounded-lg border border-border bg-card overflow-hidden">
+            <div className="flex items-center rounded-md border border-border bg-card overflow-hidden">
               <button
                 onClick={() => setCurrentDate(subMonths(currentDate, 1))}
                 aria-label="Предыдущий месяц"
-                className="h-9 w-9 flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                className="h-8 w-8 flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
               >
                 <ChevronLeft className="w-4 h-4" />
               </button>
               <button
                 onClick={() => setCurrentDate(new Date())}
-                className="h-9 px-4 text-sm font-medium border-x border-border text-foreground hover:bg-muted transition-colors"
+                className="h-8 px-3 text-xs font-medium border-x border-border text-foreground hover:bg-muted transition-colors"
               >
                 Сегодня
               </button>
               <button
                 onClick={() => setCurrentDate(addMonths(currentDate, 1))}
                 aria-label="Следующий месяц"
-                className="h-9 w-9 flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                className="h-8 w-8 flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
               >
                 <ChevronRight className="w-4 h-4" />
               </button>
             </div>
 
             <Select value={currency} onValueChange={setCurrency}>
-              <SelectTrigger className="h-9 w-[120px] bg-card border-border">
+              <SelectTrigger className="h-8 w-[110px] bg-card border-border text-xs">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -192,27 +191,27 @@ export default function Calendar() {
         </header>
 
         {/* Calendar Card */}
-        <div className="rounded-2xl border border-border bg-card overflow-hidden">
+        <div className="rounded-xl border border-border bg-card overflow-hidden flex-1 flex flex-col min-h-0">
           {/* Weekday labels */}
-          <div className="grid grid-cols-[repeat(7,1fr)_140px] border-b border-border bg-muted/40">
+          <div className="grid grid-cols-[repeat(7,1fr)_110px] border-b border-border bg-muted/40 shrink-0">
             {WEEKDAYS.map((day, i) => (
               <div
                 key={day}
                 className={cn(
-                  "py-3 text-center text-[11px] font-semibold uppercase tracking-[0.15em]",
+                  "py-1.5 text-center text-[10px] font-semibold uppercase tracking-[0.15em]",
                   i >= 5 ? "text-muted-foreground/70" : "text-muted-foreground",
                 )}
               >
                 {day}
               </div>
             ))}
-            <div className="py-3 text-center text-[11px] font-semibold uppercase tracking-[0.15em] text-muted-foreground border-l border-border">
+            <div className="py-1.5 text-center text-[10px] font-semibold uppercase tracking-[0.15em] text-muted-foreground border-l border-border">
               Неделя
             </div>
           </div>
 
           {/* Weeks */}
-          <div>
+          <div className="flex-1 flex flex-col min-h-0">
             {weeks.map((week, wi) => {
               const weekTotal = getWeekTotal(week);
               const isLastWeek = wi === weeks.length - 1;
@@ -220,7 +219,7 @@ export default function Calendar() {
                 <div
                   key={wi}
                   className={cn(
-                    "grid grid-cols-[repeat(7,1fr)_140px]",
+                    "grid grid-cols-[repeat(7,1fr)_110px] flex-1 min-h-0",
                     !isLastWeek && "border-b border-border",
                   )}
                 >
@@ -249,7 +248,7 @@ export default function Calendar() {
                         <PopoverTrigger asChild>
                           <button
                             className={cn(
-                              "min-h-[96px] sm:min-h-[110px] p-3 flex flex-col items-start justify-between text-left transition-colors outline-none relative",
+                              "p-2 flex flex-col items-start justify-between text-left transition-colors outline-none relative min-h-0",
                               !isLastCol && "border-r border-border",
                               !isCurrentMonth && "bg-muted/20",
                               isCurrentMonth && "hover:bg-muted/40",
@@ -259,7 +258,7 @@ export default function Calendar() {
                           >
                             <span
                               className={cn(
-                                "text-sm font-medium tabular-nums w-7 h-7 flex items-center justify-center rounded-full",
+                                "text-xs font-medium tabular-nums w-6 h-6 flex items-center justify-center rounded-full",
                                 !isCurrentMonth && "text-muted-foreground/50",
                                 isCurrentMonth && !isToday && "text-foreground",
                                 isToday &&
@@ -274,7 +273,7 @@ export default function Calendar() {
                                 initial={{ opacity: 0, scale: 0.92 }}
                                 animate={{ opacity: 1, scale: 1 }}
                                 transition={{ duration: 0.15 }}
-                                className="text-sm font-semibold tabular-nums text-foreground self-stretch text-right"
+                                className="text-xs font-semibold tabular-nums text-foreground self-stretch text-right truncate"
                               >
                                 {formatMoney(amt, currency)}
                               </motion.span>
@@ -282,11 +281,11 @@ export default function Calendar() {
                           </button>
                         </PopoverTrigger>
                         <PopoverContent
-                          className="w-64 p-4"
+                          className="w-60 p-3"
                           align="center"
                           sideOffset={4}
                         >
-                          <div className="space-y-3">
+                          <div className="space-y-2.5">
                             <div className="text-xs font-medium text-muted-foreground">
                               {format(day, "d MMMM yyyy", { locale: ru })}
                             </div>
@@ -303,12 +302,12 @@ export default function Calendar() {
                                 placeholder="0"
                                 value={editValue}
                                 onChange={(e) => setEditValue(e.target.value)}
-                                className="h-9 text-sm tabular-nums"
+                                className="h-8 text-sm tabular-nums"
                               />
                               <Button
                                 type="submit"
                                 size="sm"
-                                className="h-9 px-3"
+                                className="h-8 px-3"
                               >
                                 ОК
                               </Button>
@@ -329,11 +328,11 @@ export default function Calendar() {
                   })}
 
                   {/* Week total cell */}
-                  <div className="flex flex-col items-end justify-center px-4 border-l border-border bg-muted/20">
-                    <span className="text-[10px] uppercase tracking-[0.15em] text-muted-foreground mb-1">
+                  <div className="flex flex-col items-end justify-center px-3 border-l border-border bg-muted/20 min-h-0">
+                    <span className="text-[9px] uppercase tracking-[0.15em] text-muted-foreground mb-0.5">
                       Итого
                     </span>
-                    <span className="text-sm font-semibold tabular-nums text-foreground">
+                    <span className="text-xs sm:text-sm font-semibold tabular-nums text-foreground truncate max-w-full">
                       <MoneyTicker value={weekTotal} currency={currency} />
                     </span>
                   </div>
@@ -343,51 +342,37 @@ export default function Calendar() {
           </div>
         </div>
 
-        {/* Summary */}
-        <div className="mt-8 grid grid-cols-1 md:grid-cols-[1.4fr_1fr] gap-6">
-          <div className="rounded-2xl border border-border bg-card p-6 sm:p-8 flex flex-col justify-between">
-            <div>
-              <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground mb-2">
-                Итого за месяц
-              </p>
-              <div className="text-4xl sm:text-5xl font-semibold tracking-tight tabular-nums">
-                <MoneyTicker value={monthTotal} currency={currency} />
-              </div>
-            </div>
-            <p className="text-sm text-muted-foreground mt-6">
-              {daysWithEntries === 0
-                ? "Нажмите на любой день, чтобы добавить первую запись."
-                : `Записей за месяц: ${daysWithEntries} из ${monthDays.length}`}
-            </p>
+        {/* Summary footer */}
+        <div className="rounded-xl border border-border bg-card px-4 sm:px-5 py-3 flex flex-wrap items-center justify-between gap-x-6 gap-y-2 shrink-0">
+          <div className="flex items-baseline gap-3">
+            <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+              Итого за месяц
+            </span>
+            <span className="text-2xl sm:text-3xl font-semibold tracking-tight tabular-nums">
+              <MoneyTicker value={monthTotal} currency={currency} />
+            </span>
           </div>
 
-          <div className="rounded-2xl border border-border bg-card p-6 sm:p-8">
-            <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground mb-4">
-              Сводка
-            </p>
-            <dl className="space-y-4">
-              <div className="flex items-baseline justify-between gap-4">
-                <dt className="text-sm text-muted-foreground">Дней с записью</dt>
-                <dd className="text-base font-semibold tabular-nums">
-                  {daysWithEntries}
-                </dd>
-              </div>
-              <div className="flex items-baseline justify-between gap-4">
-                <dt className="text-sm text-muted-foreground">Среднее за день</dt>
-                <dd className="text-base font-semibold tabular-nums">
-                  {formatMoney(averagePerDay, currency)}
-                </dd>
-              </div>
-              <div className="flex items-baseline justify-between gap-4">
-                <dt className="text-sm text-muted-foreground">Лучший день</dt>
-                <dd className="text-base font-semibold tabular-nums">
-                  {formatMoney(bestDay, currency)}
-                </dd>
-              </div>
-            </dl>
+          <div className="flex items-center gap-5 text-xs">
+            <Stat label="Дней" value={String(daysWithEntries)} />
+            <Stat label="Среднее" value={formatMoney(averagePerDay, currency)} />
+            <Stat label="Лучший" value={formatMoney(bestDay, currency)} />
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex flex-col items-end leading-tight">
+      <span className="text-[10px] uppercase tracking-[0.15em] text-muted-foreground">
+        {label}
+      </span>
+      <span className="text-sm font-semibold tabular-nums text-foreground">
+        {value}
+      </span>
     </div>
   );
 }
