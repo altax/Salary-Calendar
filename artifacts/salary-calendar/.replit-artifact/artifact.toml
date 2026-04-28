@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "Salary Calendar"
+version = "1.0.0"
+id = "artifacts/salary-calendar"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 19370
+
+[services.development]
+run = "pnpm --filter @workspace/salary-calendar run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/salary-calendar", "run", "build" ]
+publicDir = "artifacts/salary-calendar/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "19370"
+BASE_PATH = "/"
