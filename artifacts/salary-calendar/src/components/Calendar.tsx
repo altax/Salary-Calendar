@@ -827,6 +827,339 @@ function MenuItem({
   );
 }
 
+function Sparkline({
+  values,
+  max,
+  highlight,
+}: {
+  values: number[];
+  max: number;
+  highlight?: number;
+}) {
+  if (max <= 0) {
+    return (
+      <div className="h-8 flex items-end gap-px opacity-40">
+        {values.map((_, i) => (
+          <div
+            key={i}
+            className="flex-1 bg-border rounded-sm"
+            style={{ height: "2px" }}
+          />
+        ))}
+      </div>
+    );
+  }
+  return (
+    <div className="h-8 flex items-end gap-px">
+      {values.map((v, i) => {
+        const isHighlight = highlight != null && i === highlight;
+        return (
+          <div
+            key={i}
+            className={cn(
+              "flex-1 rounded-sm",
+              v > 0
+                ? isHighlight
+                  ? "bg-primary"
+                  : "bg-foreground/70"
+                : "bg-border/40",
+            )}
+            style={{
+              height: v > 0 ? `${Math.max(10, (v / max) * 100)}%` : "8%",
+            }}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+function YearView({
+  year,
+  setYear,
+  entries,
+  currency,
+  convert,
+  onPickMonth,
+  onClose,
+}: {
+  year: number;
+  setYear: (updater: number | ((prev: number) => number)) => void;
+  entries: Record<string, Partial<Record<JobId, number>>>;
+  currency: Currency;
+  convert: (amount: number, from: Currency, to: Currency) => number;
+  onPickMonth: (date: Date) => void;
+  onClose: () => void;
+}) {
+  const today = new Date();
+  const months = useMemo(() => {
+    return Array.from({ length: 12 }, (_, i) => {
+      const monthDate = new Date(year, i, 1);
+      const days = eachDayOfInterval({
+        start: startOfMonth(monthDate),
+        end: endOfMonth(monthDate),
+      });
+      const dailyValues = days.map((d) => {
+        const entry = entries[format(d, "yyyy-MM-dd")];
+        return entry ? convert(dayTotal(entry), "RUB", currency) : 0;
+      });
+      const perJob: Record<JobId, number> = { ozon: 0, dostaevsky: 0 };
+      for (const d of days) {
+        const entry = entries[format(d, "yyyy-MM-dd")];
+        if (!entry) continue;
+        for (const job of JOBS) {
+          const v = entry[job.id];
+          if (typeof v === "number") {
+            perJob[job.id] += convert(v, "RUB", currency);
+          }
+        }
+      }
+      const total = dailyValues.reduce((a, b) => a + b, 0);
+      const worked = dailyValues.filter((v) => v > 0).length;
+      const best = dailyValues.reduce((a, b) => Math.max(a, b), 0);
+      const bestIdx = best > 0 ? dailyValues.indexOf(best) : -1;
+      return {
+        monthDate,
+        dailyValues,
+        total,
+        worked,
+        best,
+        bestIdx,
+        perJob,
+      };
+    });
+  }, [year, entries, currency, convert]);
+
+  const yearTotal = months.reduce((s, m) => s + m.total, 0);
+  const monthsWithData = months.filter((m) => m.total > 0);
+  const avgMonth = monthsWithData.length
+    ? yearTotal / monthsWithData.length
+    : 0;
+  const bestMonth = months.reduce(
+    (a, b) => (b.total > a.total ? b : a),
+    months[0],
+  );
+  const yearMaxDay = months.reduce(
+    (a, m) => Math.max(a, m.best),
+    0,
+  );
+  const totalWorkedDays = months.reduce((s, m) => s + m.worked, 0);
+  const yearAvgPerDay =
+    totalWorkedDays > 0 ? yearTotal / totalWorkedDays : 0;
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onClose();
+      } else if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        setYear((y) => y - 1);
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        setYear((y) => y + 1);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose, setYear]);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.15 }}
+      className="fixed inset-0 z-40 bg-background/95 backdrop-blur-sm overflow-auto"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="mx-auto max-w-[1280px] p-3 sm:p-4">
+        {/* Top bar */}
+        <div className="rounded-2xl border border-border bg-card flex items-center justify-between px-4 py-2.5 mb-3">
+          <div className="flex items-center gap-3">
+            <span className="text-[10px] uppercase tracking-[0.3em] text-muted-foreground">
+              [год]
+            </span>
+            <button
+              onClick={() => setYear((y) => y - 1)}
+              aria-label="Предыдущий год"
+              title="← предыдущий год"
+              className="h-7 w-7 flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted rounded-md transition-colors text-sm"
+            >
+              ‹
+            </button>
+            <span className="text-sm font-medium tabular-nums">{year}</span>
+            <button
+              onClick={() => setYear((y) => y + 1)}
+              aria-label="Следующий год"
+              title="→ следующий год"
+              className="h-7 w-7 flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted rounded-md transition-colors text-sm"
+            >
+              ›
+            </button>
+            <button
+              onClick={() => setYear(today.getFullYear())}
+              className="h-7 px-3 text-[11px] font-medium uppercase tracking-[0.2em] text-foreground hover:bg-muted rounded-md transition-colors"
+            >
+              этот год
+            </button>
+          </div>
+          <button
+            onClick={onClose}
+            title="Esc"
+            className="h-7 px-3 text-[11px] font-medium uppercase tracking-[0.2em] text-muted-foreground hover:text-foreground hover:bg-muted rounded-md transition-colors"
+          >
+            закрыть
+          </button>
+        </div>
+
+        {/* Year-level stats */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3">
+          <Tile>
+            <div className="px-4 py-3">
+              <TileLabel>итого</TileLabel>
+              <div className="mt-1.5 text-xl font-semibold tabular-nums tracking-tight">
+                {yearTotal > 0 ? (
+                  <MoneyTicker value={yearTotal} currency={currency} />
+                ) : (
+                  <span className="text-muted-foreground">—</span>
+                )}
+              </div>
+              <div className="mt-1 text-[10px] uppercase tracking-[0.2em] text-muted-foreground tabular-nums">
+                {monthsWithData.length} из 12 мес
+              </div>
+            </div>
+          </Tile>
+          <Tile>
+            <div className="px-4 py-3">
+              <TileLabel>в среднем / мес</TileLabel>
+              <div className="mt-1.5 text-xl font-semibold tabular-nums tracking-tight">
+                {avgMonth > 0 ? (
+                  <MoneyTicker value={avgMonth} currency={currency} />
+                ) : (
+                  <span className="text-muted-foreground">—</span>
+                )}
+              </div>
+              <div className="mt-1 text-[10px] uppercase tracking-[0.2em] text-muted-foreground tabular-nums">
+                по активным
+              </div>
+            </div>
+          </Tile>
+          <Tile>
+            <div className="px-4 py-3">
+              <TileLabel>в среднем / день</TileLabel>
+              <div className="mt-1.5 text-xl font-semibold tabular-nums tracking-tight">
+                {yearAvgPerDay > 0 ? (
+                  <MoneyTicker value={yearAvgPerDay} currency={currency} />
+                ) : (
+                  <span className="text-muted-foreground">—</span>
+                )}
+              </div>
+              <div className="mt-1 text-[10px] uppercase tracking-[0.2em] text-muted-foreground tabular-nums">
+                {totalWorkedDays} раб. дней
+              </div>
+            </div>
+          </Tile>
+          <Tile>
+            <div className="px-4 py-3">
+              <TileLabel>лучший месяц</TileLabel>
+              <div className="mt-1.5 text-xl font-semibold tabular-nums tracking-tight">
+                {bestMonth.total > 0 ? (
+                  <MoneyTicker
+                    value={bestMonth.total}
+                    currency={currency}
+                  />
+                ) : (
+                  <span className="text-muted-foreground">—</span>
+                )}
+              </div>
+              <div className="mt-1 text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+                {bestMonth.total > 0
+                  ? format(bestMonth.monthDate, "LLLL", {
+                      locale: ru,
+                    }).toLowerCase()
+                  : "—"}
+              </div>
+            </div>
+          </Tile>
+        </div>
+
+        {/* Month grid */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+          {months.map((m) => {
+            const isCurrent =
+              m.monthDate.getMonth() === today.getMonth() &&
+              m.monthDate.getFullYear() === today.getFullYear();
+            const isFuture =
+              m.monthDate.getFullYear() > today.getFullYear() ||
+              (m.monthDate.getFullYear() === today.getFullYear() &&
+                m.monthDate.getMonth() > today.getMonth());
+            const monthLabel = format(m.monthDate, "LLLL", {
+              locale: ru,
+            }).toLowerCase();
+
+            return (
+              <button
+                key={m.monthDate.toISOString()}
+                onClick={() => onPickMonth(m.monthDate)}
+                className={cn(
+                  "rounded-2xl border bg-card p-3 text-left hover:bg-muted/30 transition-colors flex flex-col gap-2 outline-none focus-visible:ring-1 focus-visible:ring-primary",
+                  isCurrent ? "border-primary/60" : "border-border",
+                  isFuture && m.total === 0 && "opacity-60",
+                )}
+              >
+                <div className="flex items-baseline justify-between gap-2">
+                  <span
+                    className={cn(
+                      "text-[11px] font-medium uppercase tracking-[0.18em]",
+                      isCurrent ? "text-foreground" : "text-muted-foreground",
+                    )}
+                  >
+                    {monthLabel}
+                  </span>
+                  <span className="text-[10px] tabular-nums text-muted-foreground">
+                    {m.worked > 0 ? `${m.worked}д` : "—"}
+                  </span>
+                </div>
+                <div className="text-[18px] font-semibold tabular-nums tracking-tight leading-none">
+                  {m.total > 0 ? (
+                    formatMoney(m.total, currency)
+                  ) : (
+                    <span className="text-muted-foreground/60 text-sm font-normal">
+                      —
+                    </span>
+                  )}
+                </div>
+                <Sparkline
+                  values={m.dailyValues}
+                  max={yearMaxDay}
+                  highlight={m.bestIdx}
+                />
+                <div className="flex items-center justify-between text-[10px] tabular-nums text-muted-foreground">
+                  <span className="flex items-center gap-1">
+                    <span className="inline-block w-2.5 h-2.5 rounded-sm bg-foreground/80" />
+                    {m.perJob.ozon > 0
+                      ? formatMoney(m.perJob.ozon, currency)
+                      : "—"}
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span className="inline-block w-2.5 h-2.5 rounded-sm border border-foreground/60" />
+                    {m.perJob.dostaevsky > 0
+                      ? formatMoney(m.perJob.dostaevsky, currency)
+                      : "—"}
+                  </span>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
 export default function Calendar() {
   const {
     entries,
@@ -860,6 +1193,15 @@ export default function Calendar() {
   });
   const [monthPickerOpen, setMonthPickerOpen] = useState(false);
   const [pickerYear, setPickerYear] = useState(() => new Date().getFullYear());
+  const [yearViewOpen, setYearViewOpen] = useState(false);
+  const [yearViewYear, setYearViewYear] = useState(
+    () => new Date().getFullYear(),
+  );
+
+  const openYearView = useCallback(() => {
+    setYearViewYear(currentDate.getFullYear());
+    setYearViewOpen(true);
+  }, [currentDate]);
 
   useEffect(() => {
     setPickerYear(currentDate.getFullYear());
@@ -1166,6 +1508,7 @@ export default function Calendar() {
       }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
 
+      if (yearViewOpen) return;
       if (e.key === "ArrowLeft") {
         e.preventDefault();
         setCurrentDate((d) => subMonths(d, 1));
@@ -1175,11 +1518,14 @@ export default function Calendar() {
       } else if (e.key === "t" || e.key === "T" || e.key === "е" || e.key === "Е") {
         e.preventDefault();
         setCurrentDate(new Date());
+      } else if (e.key === "y" || e.key === "Y" || e.key === "н" || e.key === "Н") {
+        e.preventDefault();
+        openYearView();
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [openKey, monthPickerOpen]);
+  }, [openKey, monthPickerOpen, yearViewOpen, openYearView]);
 
   return (
     <div className="h-[100dvh] w-full bg-background text-foreground overflow-hidden p-3 sm:p-4">
@@ -1282,6 +1628,14 @@ export default function Calendar() {
               <span className="text-foreground/80">{offCount.toString().padStart(2, "0")}</span>
               <span>вых</span>
             </span>
+
+            <button
+              onClick={openYearView}
+              title="Y — обзор года"
+              className="hidden sm:inline-flex h-7 px-2 items-center text-[10px] font-medium uppercase tracking-[0.2em] text-muted-foreground hover:text-foreground hover:bg-muted rounded-md transition-colors"
+            >
+              год ▾
+            </button>
           </div>
 
           <div className="flex items-center gap-1.5">
@@ -1820,6 +2174,23 @@ export default function Calendar() {
         />
 
       </div>
+
+      <AnimatePresence>
+        {yearViewOpen && (
+          <YearView
+            year={yearViewYear}
+            setYear={setYearViewYear}
+            entries={entries}
+            currency={currency}
+            convert={convert}
+            onPickMonth={(date) => {
+              setCurrentDate(startOfMonth(date));
+              setYearViewOpen(false);
+            }}
+            onClose={() => setYearViewOpen(false)}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }
