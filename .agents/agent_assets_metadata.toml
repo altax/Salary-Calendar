@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "u4uBpEG4PUk0y6KzjgDqE"
+uri = "file://artifacts/salary-calendar/NAVIGATION_PLAN.md"
+type = "text"
+title = "План: настоящий навигатор в режиме вождения"
