@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import {
   format,
   startOfMonth,
@@ -11,6 +11,8 @@ import {
   startOfWeek,
   endOfWeek,
   isWeekend,
+  setMonth,
+  setYear,
 } from "date-fns";
 import { ru } from "date-fns/locale";
 import { motion, AnimatePresence } from "framer-motion";
@@ -19,31 +21,36 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { Input } from "@/components/ui/input";
-import { useSalaryStore } from "@/lib/store";
+import { useSalaryStore, type Currency } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
-const CURRENCIES = [
+const CURRENCIES: { code: Currency; symbol: string }[] = [
   { code: "RUB", symbol: "₽" },
   { code: "USD", symbol: "$" },
   { code: "EUR", symbol: "€" },
-] as const;
+];
 
 const WEEKDAYS = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"];
 const WEEK_OPTIONS = { weekStartsOn: 1 as const };
+
+const MONTHS_SHORT = [
+  "янв", "фев", "мар", "апр", "май", "июн",
+  "июл", "авг", "сен", "окт", "ноя", "дек",
+];
 
 function formatMoney(value: number, currency: string) {
   return new Intl.NumberFormat("ru-RU", {
     style: "currency",
     currency,
     maximumFractionDigits: 0,
-  }).format(value);
+    minimumFractionDigits: 0,
+  }).format(Math.round(value));
 }
 
 function formatNumber(value: number) {
   return new Intl.NumberFormat("ru-RU", {
     maximumFractionDigits: 0,
-  }).format(value);
+  }).format(Math.round(value));
 }
 
 function MoneyTicker({
@@ -58,7 +65,7 @@ function MoneyTicker({
   return (
     <AnimatePresence mode="popLayout" initial={false}>
       <motion.span
-        key={`${value}-${currency}`}
+        key={`${Math.round(value)}-${currency}`}
         initial={{ opacity: 0, y: 4 }}
         animate={{ opacity: 1, y: 0 }}
         exit={{ opacity: 0, y: -4 }}
@@ -99,10 +106,23 @@ function TileLabel({ children }: { children: React.ReactNode }) {
 }
 
 export default function Calendar() {
-  const { entries, currency, setCurrency, setEntry } = useSalaryStore();
+  const {
+    entries,
+    currency,
+    setCurrency,
+    setEntryInCurrency,
+    convert,
+  } = useSalaryStore();
+
   const [currentDate, setCurrentDate] = useState(new Date());
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
+  const [monthPickerOpen, setMonthPickerOpen] = useState(false);
+  const [pickerYear, setPickerYear] = useState(() => new Date().getFullYear());
+
+  useEffect(() => {
+    setPickerYear(currentDate.getFullYear());
+  }, [currentDate]);
 
   const monthStart = startOfMonth(currentDate);
   const monthEnd = endOfMonth(currentDate);
@@ -120,13 +140,16 @@ export default function Calendar() {
     return w;
   }, [days]);
 
-  const getDayTotal = (date: Date) =>
+  const getDayRub = (date: Date) =>
     entries[format(date, "yyyy-MM-dd")] || 0;
+
+  const getDayInDisplay = (date: Date) =>
+    convert(getDayRub(date), "RUB", currency);
 
   const getWeekTotal = (weekDays: Date[]) =>
     weekDays
       .filter((d) => isSameMonth(d, currentDate))
-      .reduce((sum, d) => sum + getDayTotal(d), 0);
+      .reduce((sum, d) => sum + getDayInDisplay(d), 0);
 
   const monthDays = useMemo(
     () => eachDayOfInterval({ start: monthStart, end: monthEnd }),
@@ -134,12 +157,12 @@ export default function Calendar() {
   );
 
   const monthTotal = useMemo(
-    () => monthDays.reduce((sum, d) => sum + getDayTotal(d), 0),
-    [monthDays, entries],
+    () => monthDays.reduce((sum, d) => sum + getDayInDisplay(d), 0),
+    [monthDays, entries, currency, convert],
   );
 
   const daysWithEntries = useMemo(
-    () => monthDays.filter((d) => getDayTotal(d) > 0).length,
+    () => monthDays.filter((d) => getDayRub(d) > 0).length,
     [monthDays, entries],
   );
 
@@ -148,24 +171,34 @@ export default function Calendar() {
 
   const bestDay = useMemo(() => {
     let best = 0;
-    for (const d of monthDays) best = Math.max(best, getDayTotal(d));
+    for (const d of monthDays) best = Math.max(best, getDayInDisplay(d));
     return best;
-  }, [monthDays, entries]);
+  }, [monthDays, entries, currency, convert]);
 
   const handleSave = (date: Date) => {
-    const normalized = editValue.replace(",", ".").trim();
-    const num = parseFloat(normalized);
-    setEntry(format(date, "yyyy-MM-dd"), Number.isFinite(num) ? num : 0);
+    const num = parseInt(editValue, 10);
+    setEntryInCurrency(
+      format(date, "yyyy-MM-dd"),
+      Number.isFinite(num) ? num : 0,
+      currency,
+    );
     setOpenKey(null);
   };
 
   const handleClear = (date: Date) => {
-    setEntry(format(date, "yyyy-MM-dd"), 0);
+    setEntryInCurrency(format(date, "yyyy-MM-dd"), 0, currency);
     setOpenKey(null);
   };
 
   const monthName = format(currentDate, "LLLL", { locale: ru }).toLowerCase();
   const yearStr = format(currentDate, "yyyy");
+  const today = new Date();
+
+  const handlePickMonth = (monthIndex: number) => {
+    const next = setMonth(setYear(currentDate, pickerYear), monthIndex);
+    setCurrentDate(next);
+    setMonthPickerOpen(false);
+  };
 
   return (
     <div className="h-[100dvh] w-full bg-background text-foreground overflow-hidden p-3 sm:p-4">
@@ -182,9 +215,80 @@ export default function Calendar() {
             <span className="text-[10px] uppercase tracking-[0.3em] text-muted-foreground">
               [ledger]
             </span>
-            <h1 className="text-sm font-medium tabular-nums">
-              {monthName} <span className="text-muted-foreground">/ {yearStr}</span>
-            </h1>
+            <Popover open={monthPickerOpen} onOpenChange={setMonthPickerOpen}>
+              <PopoverTrigger asChild>
+                <button
+                  className="text-sm font-medium tabular-nums hover:text-foreground/90 transition-colors flex items-baseline gap-1.5 group"
+                  aria-label="Выбрать месяц"
+                >
+                  <span>{monthName}</span>
+                  <span className="text-muted-foreground">/ {yearStr}</span>
+                  <span className="text-muted-foreground text-[10px] group-hover:text-foreground/70 transition-colors">
+                    ▾
+                  </span>
+                </button>
+              </PopoverTrigger>
+              <PopoverContent
+                align="start"
+                sideOffset={8}
+                className="w-[260px] p-3"
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <button
+                    onClick={() => setPickerYear((y) => y - 1)}
+                    className="h-7 w-7 flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted rounded-md transition-colors"
+                    aria-label="Предыдущий год"
+                  >
+                    ‹
+                  </button>
+                  <span className="text-sm font-medium tabular-nums">
+                    {pickerYear}
+                  </span>
+                  <button
+                    onClick={() => setPickerYear((y) => y + 1)}
+                    className="h-7 w-7 flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted rounded-md transition-colors"
+                    aria-label="Следующий год"
+                  >
+                    ›
+                  </button>
+                </div>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {MONTHS_SHORT.map((m, i) => {
+                    const isSelected =
+                      i === currentDate.getMonth() &&
+                      pickerYear === currentDate.getFullYear();
+                    const isCurrentMonth =
+                      i === today.getMonth() &&
+                      pickerYear === today.getFullYear();
+                    return (
+                      <button
+                        key={m}
+                        onClick={() => handlePickMonth(i)}
+                        className={cn(
+                          "h-9 rounded-md text-xs font-medium uppercase tracking-[0.1em] transition-colors border",
+                          isSelected
+                            ? "bg-primary text-primary-foreground border-primary"
+                            : isCurrentMonth
+                              ? "border-border text-foreground hover:bg-muted"
+                              : "border-transparent text-muted-foreground hover:bg-muted hover:text-foreground",
+                        )}
+                      >
+                        {m}
+                      </button>
+                    );
+                  })}
+                </div>
+                <button
+                  onClick={() => {
+                    setCurrentDate(new Date());
+                    setMonthPickerOpen(false);
+                  }}
+                  className="mt-3 w-full h-8 rounded-md text-[11px] font-medium uppercase tracking-[0.2em] border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                >
+                  сегодня
+                </button>
+              </PopoverContent>
+            </Popover>
           </div>
           <div className="flex items-center gap-1.5">
             <button
@@ -195,7 +299,7 @@ export default function Calendar() {
               ‹
             </button>
             <button
-              onClick={() => setCurrentDate(new Date())}
+              onClick={() => setMonthPickerOpen(true)}
               className="h-7 px-3 text-[11px] font-medium uppercase tracking-[0.2em] text-foreground hover:bg-muted rounded-md transition-colors"
             >
               сегодня
@@ -266,8 +370,10 @@ export default function Calendar() {
                 >
                   {week.map((day, di) => {
                     const isCurrentMonth = isSameMonth(day, currentDate);
-                    const isToday = isSameDay(day, new Date());
-                    const amt = getDayTotal(day);
+                    const isToday = isSameDay(day, today);
+                    const amtRub = getDayRub(day);
+                    const amtDisplay = getDayInDisplay(day);
+                    const hasEntry = amtRub > 0;
                     const key = format(day, "yyyy-MM-dd");
                     const isOpen = openKey === key;
                     const weekend = isWeekend(day);
@@ -280,7 +386,10 @@ export default function Calendar() {
                         onOpenChange={(open) => {
                           if (open) {
                             setOpenKey(key);
-                            setEditValue(amt ? String(amt) : "");
+                            const displayValue = isCurrentMonth && hasEntry
+                              ? Math.round(amtDisplay)
+                              : 0;
+                            setEditValue(displayValue ? String(displayValue) : "");
                           } else if (isOpen) {
                             setOpenKey(null);
                           }
@@ -292,32 +401,44 @@ export default function Calendar() {
                               "flex flex-col items-stretch justify-between text-left transition-colors outline-none relative min-h-0 px-2 py-1.5 group",
                               !isLastCol && "border-r border-border",
                               !isCurrentMonth && "bg-background/40",
+                              isCurrentMonth && weekend && !hasEntry && "bg-muted/20",
+                              isCurrentMonth && hasEntry && "bg-foreground/[0.06]",
                               isCurrentMonth && "hover:bg-muted/60",
-                              isCurrentMonth && weekend && !amt && "bg-muted/20",
                               "focus-visible:ring-1 focus-visible:ring-primary focus-visible:ring-inset",
                             )}
                           >
-                            <span
-                              className={cn(
-                                "text-[11px] font-medium tabular-nums tracking-tight",
-                                !isCurrentMonth && "text-muted-foreground/30",
-                                isCurrentMonth && !isToday && !amt && "text-muted-foreground",
-                                isCurrentMonth && amt > 0 && !isToday && "text-foreground",
-                                isToday &&
-                                  "text-primary-foreground bg-primary px-1.5 py-0.5 rounded-sm self-start",
-                              )}
-                            >
-                              {format(day, "dd")}
-                            </span>
+                            {/* Subtle accent stripe for days with entries */}
+                            {hasEntry && isCurrentMonth && (
+                              <span className="absolute top-0 left-0 right-0 h-px bg-foreground/40" />
+                            )}
 
-                            {amt > 0 && isCurrentMonth && (
+                            <div className="flex items-center justify-between">
+                              <span
+                                className={cn(
+                                  "text-[11px] font-medium tabular-nums tracking-tight",
+                                  !isCurrentMonth && "text-muted-foreground/30",
+                                  isCurrentMonth && !isToday && !hasEntry && "text-muted-foreground",
+                                  isCurrentMonth && hasEntry && !isToday && "text-foreground",
+                                  isToday &&
+                                    "text-primary-foreground bg-primary px-1.5 py-0.5 rounded-sm self-start",
+                                )}
+                              >
+                                {format(day, "dd")}
+                              </span>
+                              {hasEntry && isCurrentMonth && !isToday && (
+                                <span className="w-1 h-1 rounded-full bg-foreground/60" />
+                              )}
+                            </div>
+
+                            {hasEntry && isCurrentMonth && (
                               <motion.span
+                                key={`${amtRub}-${currency}`}
                                 initial={{ opacity: 0, y: 2 }}
                                 animate={{ opacity: 1, y: 0 }}
-                                transition={{ duration: 0.15 }}
+                                transition={{ duration: 0.18 }}
                                 className="text-[12px] font-semibold tabular-nums text-foreground text-right truncate leading-none mt-1"
                               >
-                                {formatMoney(amt, currency)}
+                                {formatMoney(amtDisplay, currency)}
                               </motion.span>
                             )}
                           </button>
@@ -328,8 +449,13 @@ export default function Calendar() {
                           sideOffset={4}
                         >
                           <div className="space-y-2.5">
-                            <div className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
-                              {format(day, "d MMMM yyyy", { locale: ru })}
+                            <div className="flex items-center justify-between">
+                              <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+                                {format(day, "d MMMM yyyy", { locale: ru })}
+                              </span>
+                              <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+                                {currency}
+                              </span>
                             </div>
                             <form
                               onSubmit={(e) => {
@@ -338,13 +464,28 @@ export default function Calendar() {
                               }}
                               className="flex gap-2"
                             >
-                              <Input
+                              <input
                                 autoFocus
-                                inputMode="decimal"
+                                inputMode="numeric"
+                                pattern="[0-9]*"
                                 placeholder="0"
                                 value={editValue}
-                                onChange={(e) => setEditValue(e.target.value)}
-                                className="h-8 text-sm tabular-nums font-mono"
+                                onChange={(e) => {
+                                  const cleaned = e.target.value.replace(/\D/g, "");
+                                  setEditValue(cleaned.replace(/^0+(?=\d)/, ""));
+                                }}
+                                onKeyDown={(e) => {
+                                  const allowed = [
+                                    "Backspace", "Delete", "ArrowLeft", "ArrowRight",
+                                    "Tab", "Home", "End", "Enter",
+                                  ];
+                                  if (allowed.includes(e.key)) return;
+                                  if (e.metaKey || e.ctrlKey) return;
+                                  if (!/^[0-9]$/.test(e.key)) {
+                                    e.preventDefault();
+                                  }
+                                }}
+                                className="flex-1 h-8 px-2.5 text-sm tabular-nums font-mono bg-background border border-border rounded-md focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary"
                               />
                               <button
                                 type="submit"
@@ -353,7 +494,7 @@ export default function Calendar() {
                                 ок
                               </button>
                             </form>
-                            {amt > 0 && (
+                            {hasEntry && (
                               <button
                                 type="button"
                                 onClick={() => handleClear(day)}
