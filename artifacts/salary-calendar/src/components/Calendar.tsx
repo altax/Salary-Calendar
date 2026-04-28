@@ -25,6 +25,7 @@ import {
   useSalaryStore,
   type Currency,
   type JobId,
+  type Obligation,
   JOBS,
   dayTotal,
 } from "@/lib/store";
@@ -154,6 +155,238 @@ function NumericInput({
   );
 }
 
+function ObligationsPanel({
+  obligations,
+  currency,
+  convert,
+  onAdd,
+  onUpdate,
+  onRemove,
+}: {
+  obligations: Obligation[];
+  currency: Currency;
+  convert: (amount: number, from: Currency, to: Currency) => number;
+  onAdd: (name: string, amount: number, currency: Currency) => void;
+  onUpdate: (
+    id: string,
+    name: string,
+    amount: number,
+    currency: Currency,
+  ) => void;
+  onRemove: (id: string) => void;
+}) {
+  const [addOpen, setAddOpen] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newAmount, setNewAmount] = useState("");
+  const [editId, setEditId] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editAmount, setEditAmount] = useState("");
+
+  const total = obligations.reduce(
+    (s, o) => s + convert(o.amountRub, "RUB", currency),
+    0,
+  );
+
+  const handleAdd = () => {
+    const num = parseInt(newAmount || "0", 10);
+    if (!newName.trim() || !Number.isFinite(num) || num <= 0) return;
+    onAdd(newName, num, currency);
+    setNewName("");
+    setNewAmount("");
+    setAddOpen(false);
+  };
+
+  const handleSaveEdit = () => {
+    if (!editId) return;
+    const num = parseInt(editAmount || "0", 10);
+    if (!editName.trim() || !Number.isFinite(num) || num <= 0) return;
+    onUpdate(editId, editName, num, currency);
+    setEditId(null);
+  };
+
+  return (
+    <div className="rounded-2xl border border-border bg-card overflow-hidden flex flex-col min-h-0">
+      <div className="px-4 py-2 border-b border-border shrink-0 flex items-center justify-between">
+        <TileLabel>обязанности</TileLabel>
+        <Popover
+          open={addOpen}
+          onOpenChange={(open) => {
+            setAddOpen(open);
+            if (open) {
+              setNewName("");
+              setNewAmount("");
+            }
+          }}
+        >
+          <PopoverTrigger asChild>
+            <button
+              className="h-6 w-6 inline-flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors text-base leading-none"
+              aria-label="Добавить обязанность"
+            >
+              +
+            </button>
+          </PopoverTrigger>
+          <PopoverContent
+            align="end"
+            sideOffset={8}
+            className="w-[260px] p-3"
+          >
+            <div className="space-y-2.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+                  новая обязанность
+                </span>
+                <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+                  {currency}
+                </span>
+              </div>
+              <input
+                autoFocus
+                placeholder="название"
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    handleAdd();
+                  }
+                }}
+                maxLength={40}
+                className="w-full h-8 px-2.5 text-sm bg-background border border-border rounded-md focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary"
+              />
+              <NumericInput
+                placeholder="0"
+                value={newAmount}
+                onChange={setNewAmount}
+                onSubmit={handleAdd}
+              />
+              <div className="flex justify-end pt-1">
+                <button
+                  type="button"
+                  onClick={handleAdd}
+                  className="h-8 px-4 text-xs font-medium uppercase tracking-[0.15em] bg-primary text-primary-foreground rounded-md hover:opacity-90"
+                >
+                  добавить
+                </button>
+              </div>
+            </div>
+          </PopoverContent>
+        </Popover>
+      </div>
+
+      <ul className="flex-1 overflow-auto divide-y divide-border">
+        {obligations.length === 0 && (
+          <li className="px-4 py-6 text-center text-[11px] text-muted-foreground leading-relaxed">
+            нажмите <span className="text-foreground">+</span>
+            <br />
+            чтобы добавить
+            <br />
+            аренду, интернет и т.д.
+          </li>
+        )}
+        {obligations.map((o) => {
+          const displayAmount = convert(o.amountRub, "RUB", currency);
+          const isEditing = editId === o.id;
+          return (
+            <li key={o.id}>
+              <Popover
+                open={isEditing}
+                onOpenChange={(open) => {
+                  if (open) {
+                    setEditId(o.id);
+                    setEditName(o.name);
+                    setEditAmount(String(Math.round(displayAmount)));
+                  } else if (isEditing) {
+                    setEditId(null);
+                  }
+                }}
+              >
+                <PopoverTrigger asChild>
+                  <button className="w-full flex items-center justify-between gap-2 px-4 py-2 hover:bg-muted/40 transition-colors text-left outline-none focus-visible:ring-1 focus-visible:ring-primary focus-visible:ring-inset">
+                    <span className="text-[11px] truncate min-w-0 flex-1">
+                      {o.name}
+                    </span>
+                    <span className="text-xs font-semibold tabular-nums shrink-0">
+                      <MoneyTicker
+                        value={displayAmount}
+                        currency={currency}
+                      />
+                    </span>
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent
+                  align="end"
+                  sideOffset={4}
+                  className="w-[260px] p-3"
+                >
+                  <div className="space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+                        обязанность
+                      </span>
+                      <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+                        {currency}
+                      </span>
+                    </div>
+                    <input
+                      autoFocus
+                      value={editName}
+                      onChange={(e) => setEditName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          handleSaveEdit();
+                        }
+                      }}
+                      maxLength={40}
+                      className="w-full h-8 px-2.5 text-sm bg-background border border-border rounded-md focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary"
+                    />
+                    <NumericInput
+                      value={editAmount}
+                      onChange={setEditAmount}
+                      onSubmit={handleSaveEdit}
+                    />
+                    <div className="flex items-center justify-between gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onRemove(o.id);
+                          setEditId(null);
+                        }}
+                        className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground hover:text-destructive transition-colors"
+                      >
+                        удалить
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleSaveEdit}
+                        className="h-8 px-4 text-xs font-medium uppercase tracking-[0.15em] bg-primary text-primary-foreground rounded-md hover:opacity-90"
+                      >
+                        сохранить
+                      </button>
+                    </div>
+                  </div>
+                </PopoverContent>
+              </Popover>
+            </li>
+          );
+        })}
+      </ul>
+
+      {obligations.length > 0 && (
+        <div className="px-4 py-2.5 border-t border-border shrink-0 flex items-center justify-between bg-muted/20">
+          <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+            всего
+          </span>
+          <span className="text-sm font-semibold tabular-nums">
+            <MoneyTicker value={total} currency={currency} />
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function Calendar() {
   const {
     entries,
@@ -161,6 +394,10 @@ export default function Calendar() {
     setCurrency,
     setDayEntries,
     convert,
+    obligations,
+    addObligation,
+    updateObligation,
+    removeObligation,
   } = useSalaryStore();
 
   const [currentDate, setCurrentDate] = useState(new Date());
@@ -276,14 +513,14 @@ export default function Calendar() {
   return (
     <div className="h-[100dvh] w-full bg-background text-foreground overflow-hidden p-3 sm:p-4">
       <div
-        className="mx-auto w-full max-w-[1200px] h-full grid gap-3 min-h-0"
+        className="mx-auto w-full max-w-[1280px] h-full grid gap-3 min-h-0"
         style={{
-          gridTemplateColumns: "minmax(0, 1fr) 280px",
+          gridTemplateColumns: "minmax(0, 1fr) 240px 240px",
           gridTemplateRows: "auto minmax(0, 1fr) auto",
         }}
       >
         {/* Header bar */}
-        <header className="col-span-2 rounded-2xl border border-border bg-card flex items-center justify-between px-4 py-2.5 min-h-0">
+        <header className="col-span-3 rounded-2xl border border-border bg-card flex items-center justify-between px-4 py-2.5 min-h-0">
           <div className="flex items-baseline gap-3">
             <span className="text-[10px] uppercase tracking-[0.3em] text-muted-foreground">
               [ledger]
@@ -723,8 +960,18 @@ export default function Calendar() {
           </Tile>
         </div>
 
+        {/* Obligations column */}
+        <ObligationsPanel
+          obligations={obligations}
+          currency={currency}
+          convert={convert}
+          onAdd={addObligation}
+          onUpdate={updateObligation}
+          onRemove={removeObligation}
+        />
+
         {/* Bottom stats bar */}
-        <div className="col-span-2 grid grid-cols-3 gap-3 min-h-0">
+        <div className="col-span-3 grid grid-cols-3 gap-3 min-h-0">
           <Tile className="px-4 py-3">
             <TileLabel>среднее в день</TileLabel>
             <div className="mt-1 text-base font-semibold tabular-nums">

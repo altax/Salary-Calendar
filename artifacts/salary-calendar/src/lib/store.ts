@@ -4,6 +4,27 @@ const ENTRIES_V2_KEY = "salary-calendar:entries:v2";
 const ENTRIES_V3_KEY = "salary-calendar:entries:v3";
 const CURRENCY_KEY = "salary-calendar:currency:v2";
 const RATES_KEY = "salary-calendar:rates:v1";
+const OBLIGATIONS_KEY = "salary-calendar:obligations:v1";
+
+export type Obligation = {
+  id: string;
+  name: string;
+  amountRub: number;
+};
+
+function loadObligations(): Obligation[] {
+  try {
+    const raw = localStorage.getItem(OBLIGATIONS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed as Obligation[];
+  } catch {}
+  return [];
+}
+
+function makeId() {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+}
 
 export type Currency = "RUB" | "USD" | "EUR";
 export type JobId = "ozon" | "dostaevsky";
@@ -105,6 +126,9 @@ export function useSalaryStore() {
   });
 
   const [rates, setRates] = useState<Rates>(() => loadCachedRates());
+  const [obligations, setObligations] = useState<Obligation[]>(() =>
+    loadObligations(),
+  );
 
   useEffect(() => {
     localStorage.setItem(ENTRIES_V3_KEY, JSON.stringify(entries));
@@ -113,6 +137,10 @@ export function useSalaryStore() {
   useEffect(() => {
     localStorage.setItem(CURRENCY_KEY, currency);
   }, [currency]);
+
+  useEffect(() => {
+    localStorage.setItem(OBLIGATIONS_KEY, JSON.stringify(obligations));
+  }, [obligations]);
 
   useEffect(() => {
     const cached = loadCachedRates();
@@ -172,6 +200,54 @@ export function useSalaryStore() {
     });
   };
 
+  const addObligation = (
+    name: string,
+    amountInDisplay: number,
+    displayCurrency: Currency,
+  ) => {
+    const trimmed = name.trim();
+    if (!trimmed || !Number.isFinite(amountInDisplay) || amountInDisplay <= 0)
+      return;
+    const amountRub =
+      displayCurrency === "RUB"
+        ? amountInDisplay
+        : amountInDisplay / rates.values[displayCurrency];
+    setObligations((prev) => [
+      ...prev,
+      {
+        id: makeId(),
+        name: trimmed,
+        amountRub: Math.round(amountRub * 100) / 100,
+      },
+    ]);
+  };
+
+  const updateObligation = (
+    id: string,
+    name: string,
+    amountInDisplay: number,
+    displayCurrency: Currency,
+  ) => {
+    const trimmed = name.trim();
+    if (!trimmed || !Number.isFinite(amountInDisplay) || amountInDisplay <= 0)
+      return;
+    const amountRub =
+      displayCurrency === "RUB"
+        ? amountInDisplay
+        : amountInDisplay / rates.values[displayCurrency];
+    setObligations((prev) =>
+      prev.map((o) =>
+        o.id === id
+          ? { ...o, name: trimmed, amountRub: Math.round(amountRub * 100) / 100 }
+          : o,
+      ),
+    );
+  };
+
+  const removeObligation = (id: string) => {
+    setObligations((prev) => prev.filter((o) => o.id !== id));
+  };
+
   return {
     entries,
     currency,
@@ -179,5 +255,9 @@ export function useSalaryStore() {
     setDayEntries,
     convert,
     rates,
+    obligations,
+    addObligation,
+    updateObligation,
+    removeObligation,
   };
 }
