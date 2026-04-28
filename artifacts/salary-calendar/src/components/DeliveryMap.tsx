@@ -136,6 +136,36 @@ function makeDepotIcon(opts: { theme: "dark" | "light"; size?: number }) {
   });
 }
 
+function makeManeuverIcon(opts: { arrow: string; theme: "dark" | "light"; size?: number }) {
+  const { arrow, theme, size = 22 } = opts;
+  const bg = theme === "dark" ? "#fafafa" : "#0a0a0a";
+  const fg = theme === "dark" ? "#0a0a0a" : "#fafafa";
+  const html = `
+    <div style="
+      width: ${size}px;
+      height: ${size}px;
+      border-radius: 50%;
+      background: ${bg};
+      color: ${fg};
+      border: 2px solid ${bg};
+      box-shadow: 0 0 0 2px rgba(0,0,0,0.55);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 1;
+    ">${arrow}</div>
+  `;
+  return L.divIcon({
+    className: "maneuver-marker",
+    html,
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2],
+  });
+}
+
 function makeUserIcon(opts: { heading: number | null; size?: number }) {
   const { heading, size = 22 } = opts;
   const arrow =
@@ -210,6 +240,13 @@ function FollowUser({ position }: { position: GeoPosition | null }) {
   return null;
 }
 
+export type ManeuverMarker = {
+  lat: number;
+  lng: number;
+  arrow: string;
+  label?: string;
+};
+
 export type DeliveryMapProps = {
   deliveries: Delivery[];
   pending: PendingOrder[];
@@ -233,6 +270,10 @@ export type DeliveryMapProps = {
   className?: string;
   interactive?: boolean;
   initialZoom?: number;
+  pendingRouteGeometry?: [number, number][] | null;
+  activeRouteGeometry?: [number, number][] | null;
+  traveledGeometry?: [number, number][] | null;
+  maneuvers?: ManeuverMarker[] | null;
 };
 
 export default function DeliveryMap({
@@ -258,6 +299,10 @@ export default function DeliveryMap({
   className,
   interactive = true,
   initialZoom = 11,
+  pendingRouteGeometry,
+  activeRouteGeometry,
+  traveledGeometry,
+  maneuvers,
 }: DeliveryMapProps) {
   const sortedDeliveries = useMemo(
     () =>
@@ -307,13 +352,19 @@ export default function DeliveryMap({
 
   const pendingRoutePositions = useMemo(() => {
     if (!showPendingRoute || pending.length === 0) return null;
+    if (pendingRouteGeometry && pendingRouteGeometry.length >= 2) {
+      return pendingRouteGeometry;
+    }
     const positions: [number, number][] = [];
     if (depot) positions.push([depot.lat, depot.lng]);
     for (const p of pending) positions.push([p.lat, p.lng]);
     return positions;
-  }, [pending, depot, showPendingRoute]);
+  }, [pending, depot, showPendingRoute, pendingRouteGeometry]);
 
   const activeRoutePositions = useMemo(() => {
+    if (activeRouteGeometry && activeRouteGeometry.length >= 2) {
+      return activeRouteGeometry;
+    }
     if (!activePendingId || !userPosition) return null;
     const target = pending.find((p) => p.id === activePendingId);
     if (!target) return null;
@@ -321,7 +372,7 @@ export default function DeliveryMap({
       [userPosition.lat, userPosition.lng],
       [target.lat, target.lng],
     ] as [number, number][];
-  }, [activePendingId, userPosition, pending]);
+  }, [activePendingId, userPosition, pending, activeRouteGeometry]);
 
   const accentColor = theme === "dark" ? "#fafafa" : "#0a0a0a";
 
@@ -349,8 +400,10 @@ export default function DeliveryMap({
             positions={pendingRoutePositions}
             pathOptions={{
               color: accentColor,
-              weight: 3,
-              opacity: 0.55,
+              weight: pendingRouteGeometry ? 5 : 3,
+              opacity: pendingRouteGeometry ? 0.45 : 0.55,
+              lineCap: "round",
+              lineJoin: "round",
             }}
           />
         )}
@@ -360,12 +413,38 @@ export default function DeliveryMap({
             positions={activeRoutePositions}
             pathOptions={{
               color: "#3b82f6",
-              weight: 4,
-              opacity: 0.85,
-              dashArray: "8 6",
+              weight: activeRouteGeometry ? 6 : 4,
+              opacity: 0.92,
+              dashArray: activeRouteGeometry ? undefined : "8 6",
+              lineCap: "round",
+              lineJoin: "round",
             }}
           />
         )}
+
+        {traveledGeometry && traveledGeometry.length >= 2 && (
+          <Polyline
+            positions={traveledGeometry}
+            pathOptions={{
+              color: theme === "dark" ? "#444" : "#bbb",
+              weight: 5,
+              opacity: 0.7,
+              lineCap: "round",
+              lineJoin: "round",
+            }}
+          />
+        )}
+
+        {maneuvers?.map((m, i) => (
+          <Marker
+            key={`mv-${i}`}
+            position={[m.lat, m.lng]}
+            icon={makeManeuverIcon({ arrow: m.arrow, theme })}
+            interactive={false}
+            keyboard={false}
+            zIndexOffset={500}
+          />
+        ))}
 
         {routeByJob.map((r, i) => (
           <Polyline

@@ -6,9 +6,12 @@ export type RoutePoint = {
   lng: number;
 };
 
+export type DistFn = (a: { lat: number; lng: number }, b: { lat: number; lng: number }) => number;
+
 export function nearestNeighborRoute<T extends RoutePoint>(
   start: { lat: number; lng: number },
   points: T[],
+  dist: DistFn = haversineKm,
 ): T[] {
   if (points.length === 0) return [];
   const remaining = points.slice();
@@ -18,7 +21,7 @@ export function nearestNeighborRoute<T extends RoutePoint>(
     let bestIdx = 0;
     let bestDist = Infinity;
     for (let i = 0; i < remaining.length; i += 1) {
-      const d = haversineKm(cursor, remaining[i]);
+      const d = dist(cursor, remaining[i]);
       if (d < bestDist) {
         bestDist = d;
         bestIdx = i;
@@ -35,10 +38,10 @@ export function twoOptImprove<T extends RoutePoint>(
   start: { lat: number; lng: number },
   route: T[],
   maxIterations = 50,
+  dist: DistFn = haversineKm,
 ): T[] {
   if (route.length < 4) return route;
   const all = [{ id: "__start__", lat: start.lat, lng: start.lng } as T, ...route];
-  const dist = (a: T, b: T) => haversineKm(a, b);
   const totalLen = (arr: T[]) => {
     let s = 0;
     for (let i = 1; i < arr.length; i += 1) s += dist(arr[i - 1], arr[i]);
@@ -67,4 +70,21 @@ export function twoOptImprove<T extends RoutePoint>(
     }
   }
   return best.slice(1);
+}
+
+export function makeMatrixDistFn(
+  ids: string[],
+  matrix: number[][],
+  startId = "__start__",
+): DistFn {
+  const idx = new Map<string, number>();
+  ids.forEach((id, i) => idx.set(id, i));
+  return (a, b) => {
+    const ai = idx.get((a as any).id ?? startId);
+    const bi = idx.get((b as any).id ?? startId);
+    if (ai == null || bi == null || !matrix[ai] || matrix[ai][bi] == null) {
+      return haversineKm(a, b) * 1000;
+    }
+    return matrix[ai][bi];
+  };
 }

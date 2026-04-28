@@ -16,8 +16,13 @@ import {
   type PendingOrder,
 } from "@/lib/deliveries";
 import { searchAddress, reverseGeocode, type GeocodeResult } from "@/lib/geocode";
-import { nearestNeighborRoute, twoOptImprove } from "@/lib/route-optimizer";
+import {
+  nearestNeighborRoute,
+  twoOptImprove,
+  makeMatrixDistFn,
+} from "@/lib/route-optimizer";
 import { useGeolocation } from "@/lib/geolocation";
+import { useRoute, useDistanceMatrix } from "@/lib/use-route";
 import DeliveryMap from "@/components/DeliveryMap";
 import DriveMode from "@/components/DriveMode";
 import { cn } from "@/lib/utils";
@@ -104,18 +109,43 @@ export default function MapView() {
     [deliveriesStore.pending],
   );
 
+  // Real road distance matrix from depot through all pending stops.
+  const matrixPoints = useMemo(() => {
+    if (deliveriesStore.pending.length < 2) return null;
+    return [
+      { id: "__start__", lat: salary.depot.lat, lng: salary.depot.lng },
+      ...deliveriesStore.pending.map((p) => ({ id: p.id, lat: p.lat, lng: p.lng })),
+    ];
+  }, [deliveriesStore.pending, salary.depot.lat, salary.depot.lng]);
+
+  const matrix = useDistanceMatrix(matrixPoints);
+
   useEffect(() => {
     if (deliveriesStore.pending.length < 2) return;
     const start = { lat: salary.depot.lat, lng: salary.depot.lng };
-    const ordered = nearestNeighborRoute(start, deliveriesStore.pending);
-    const refined = twoOptImprove(start, ordered);
+    const dist = matrix.durations
+      ? makeMatrixDistFn(matrix.ids, matrix.durations)
+      : undefined;
+    const ordered = nearestNeighborRoute(start, deliveriesStore.pending, dist);
+    const refined = twoOptImprove(start, ordered, 50, dist);
     const newOrder = refined.map((p) => p.id);
     const curOrder = deliveriesStore.pending.map((p) => p.id);
     if (newOrder.join("|") !== curOrder.join("|")) {
       deliveriesStore.reorderPending(newOrder);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingIdsKey, salary.depot.lat, salary.depot.lng]);
+  }, [pendingIdsKey, salary.depot.lat, salary.depot.lng, matrix.durations]);
+
+  // Real road geometry for the planned pending route (depot → all stops).
+  const pendingRoutePoints = useMemo(() => {
+    if (deliveriesStore.pending.length === 0) return null;
+    return [
+      { lat: salary.depot.lat, lng: salary.depot.lng },
+      ...deliveriesStore.pending.map((p) => ({ lat: p.lat, lng: p.lng })),
+    ];
+  }, [deliveriesStore.pending, salary.depot.lat, salary.depot.lng]);
+
+  const pendingRoute = useRoute(pendingRoutePoints);
 
   const visibleDeliveries = useMemo(
     () =>
@@ -155,12 +185,13 @@ export default function MapView() {
   // Pending route metrics (from depot through ordered stops)
   const pendingKm = useMemo(() => {
     if (deliveriesStore.pending.length === 0) return 0;
+    if (pendingRoute.route) return pendingRoute.route.distance / 1000;
     const points = [
       { lat: salary.depot.lat, lng: salary.depot.lng },
       ...deliveriesStore.pending.map((p) => ({ lat: p.lat, lng: p.lng })),
     ];
     return totalRouteKm(points);
-  }, [deliveriesStore.pending, salary.depot]);
+  }, [deliveriesStore.pending, salary.depot, pendingRoute.route]);
 
   const pendingPotentialRub = useMemo(() => {
     let sum = 0;
@@ -297,6 +328,7 @@ export default function MapView() {
             flyTo={flyTo}
             showRoute={showRoute}
             showPendingRoute={true}
+            pendingRouteGeometry={pendingRoute.route?.geometry ?? null}
           />
           <div className="absolute bottom-3 left-3 z-[400] pointer-events-none">
             <div className="rounded-md bg-background/85 backdrop-blur-sm border border-border px-2.5 py-1.5 text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
