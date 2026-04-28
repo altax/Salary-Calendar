@@ -1,10 +1,28 @@
 import { useState, useEffect, useCallback } from "react";
+import {
+  startOfMonth,
+  endOfMonth,
+  eachDayOfInterval,
+  format,
+  differenceInCalendarDays,
+  setDate,
+} from "date-fns";
 
 const ENTRIES_V2_KEY = "salary-calendar:entries:v2";
 const ENTRIES_V3_KEY = "salary-calendar:entries:v3";
 const CURRENCY_KEY = "salary-calendar:currency:v2";
 const RATES_KEY = "salary-calendar:rates:v1";
 const OBLIGATIONS_KEY = "salary-calendar:obligations:v1";
+const SCHEDULE_KEY = "salary-calendar:schedule:v1";
+
+export type SchedulePattern = { work: number; off: number };
+
+export const SCHEDULE_PATTERNS: { id: string; label: string; pattern: SchedulePattern }[] = [
+  { id: "2/2", label: "2/2", pattern: { work: 2, off: 2 } },
+  { id: "3/3", label: "3/3", pattern: { work: 3, off: 3 } },
+  { id: "5/2", label: "5/2", pattern: { work: 5, off: 2 } },
+  { id: "1/3", label: "1/3", pattern: { work: 1, off: 3 } },
+];
 
 export type Obligation = {
   id: string;
@@ -31,6 +49,17 @@ export type JobId = "ozon" | "dostaevsky";
 
 export type DayEntry = Partial<Record<JobId, number>>;
 export type Entries = Record<string, DayEntry>;
+export type Schedule = Record<string, JobId[]>;
+
+function loadSchedule(): Schedule {
+  try {
+    const raw = localStorage.getItem(SCHEDULE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") return parsed as Schedule;
+  } catch {}
+  return {};
+}
 
 export const JOBS: { id: JobId; short: string; label: string }[] = [
   { id: "ozon", short: "о", label: "Озон ПВЗ" },
@@ -129,6 +158,7 @@ export function useSalaryStore() {
   const [obligations, setObligations] = useState<Obligation[]>(() =>
     loadObligations(),
   );
+  const [schedule, setSchedule] = useState<Schedule>(() => loadSchedule());
 
   useEffect(() => {
     localStorage.setItem(ENTRIES_V3_KEY, JSON.stringify(entries));
@@ -141,6 +171,10 @@ export function useSalaryStore() {
   useEffect(() => {
     localStorage.setItem(OBLIGATIONS_KEY, JSON.stringify(obligations));
   }, [obligations]);
+
+  useEffect(() => {
+    localStorage.setItem(SCHEDULE_KEY, JSON.stringify(schedule));
+  }, [schedule]);
 
   useEffect(() => {
     const cached = loadCachedRates();
@@ -248,6 +282,60 @@ export function useSalaryStore() {
     setObligations((prev) => prev.filter((o) => o.id !== id));
   };
 
+  const applySchedule = (
+    jobId: JobId,
+    pattern: SchedulePattern,
+    startDayInMonth: number,
+    monthDate: Date,
+  ) => {
+    if (pattern.work <= 0) return;
+    const cycle = pattern.work + pattern.off;
+    const monthStart = startOfMonth(monthDate);
+    const monthEnd = endOfMonth(monthDate);
+    const days = eachDayOfInterval({ start: monthStart, end: monthEnd });
+    const safeStartDay = Math.max(
+      1,
+      Math.min(startDayInMonth, monthEnd.getDate()),
+    );
+    const startDate = setDate(monthStart, safeStartDay);
+
+    setSchedule((prev) => {
+      const next = { ...prev };
+      for (const day of days) {
+        const key = format(day, "yyyy-MM-dd");
+        const existing = (next[key] || []).filter((j) => j !== jobId);
+        const diff = differenceInCalendarDays(day, startDate);
+        let isWork = false;
+        if (diff >= 0) {
+          isWork = diff % cycle < pattern.work;
+        }
+        const merged = isWork ? [...existing, jobId] : existing;
+        if (merged.length === 0) {
+          delete next[key];
+        } else {
+          next[key] = merged;
+        }
+      }
+      return next;
+    });
+  };
+
+  const clearScheduleForMonth = (jobId: JobId, monthDate: Date) => {
+    const monthStart = startOfMonth(monthDate);
+    const monthEnd = endOfMonth(monthDate);
+    const days = eachDayOfInterval({ start: monthStart, end: monthEnd });
+    setSchedule((prev) => {
+      const next = { ...prev };
+      for (const day of days) {
+        const key = format(day, "yyyy-MM-dd");
+        const remaining = (next[key] || []).filter((j) => j !== jobId);
+        if (remaining.length === 0) delete next[key];
+        else next[key] = remaining;
+      }
+      return next;
+    });
+  };
+
   return {
     entries,
     currency,
@@ -259,5 +347,8 @@ export function useSalaryStore() {
     addObligation,
     updateObligation,
     removeObligation,
+    schedule,
+    applySchedule,
+    clearScheduleForMonth,
   };
 }

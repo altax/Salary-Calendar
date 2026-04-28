@@ -26,7 +26,9 @@ import {
   type Currency,
   type JobId,
   type Obligation,
+  type SchedulePattern,
   JOBS,
+  SCHEDULE_PATTERNS,
   dayTotal,
 } from "@/lib/store";
 import { cn } from "@/lib/utils";
@@ -152,6 +154,169 @@ function NumericInput({
       }}
       className="w-full h-8 px-2.5 text-sm tabular-nums font-mono bg-background border border-border rounded-md focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary"
     />
+  );
+}
+
+function SchedulePicker({
+  currentDate,
+  onApply,
+  onClear,
+}: {
+  currentDate: Date;
+  onApply: (
+    jobId: JobId,
+    pattern: SchedulePattern,
+    startDayInMonth: number,
+    monthDate: Date,
+  ) => void;
+  onClear: (jobId: JobId, monthDate: Date) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [job, setJob] = useState<JobId>("ozon");
+  const [patternId, setPatternId] = useState<string>(SCHEDULE_PATTERNS[0].id);
+  const [startDay, setStartDay] = useState<string>("1");
+
+  useEffect(() => {
+    if (open) setStartDay("1");
+  }, [open, currentDate]);
+
+  const monthName = format(currentDate, "LLLL", { locale: ru }).toLowerCase();
+  const daysInMonth = endOfMonth(currentDate).getDate();
+
+  const handleApply = () => {
+    const pattern =
+      SCHEDULE_PATTERNS.find((p) => p.id === patternId)?.pattern ??
+      SCHEDULE_PATTERNS[0].pattern;
+    const day = Math.max(1, Math.min(parseInt(startDay || "1", 10) || 1, daysInMonth));
+    onApply(job, pattern, day, currentDate);
+    setOpen(false);
+  };
+
+  const handleClear = () => {
+    onClear(job, currentDate);
+    setOpen(false);
+  };
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          className="text-[10px] font-medium uppercase tracking-[0.2em] text-muted-foreground hover:text-foreground transition-colors px-1.5 py-0.5 rounded-sm hover:bg-muted"
+          aria-label="Помощник графика"
+        >
+          график
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="end"
+        sideOffset={8}
+        className="w-[280px] p-3"
+      >
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+              график на {monthName}
+            </span>
+          </div>
+
+          <div className="space-y-1.5">
+            <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+              работа
+            </span>
+            <div className="flex items-center rounded-md border border-border overflow-hidden">
+              {JOBS.map((j) => (
+                <button
+                  key={j.id}
+                  onClick={() => setJob(j.id)}
+                  className={cn(
+                    "flex-1 h-8 text-xs font-medium transition-colors flex items-center justify-center gap-1.5",
+                    job === j.id
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:text-foreground hover:bg-muted",
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "w-3.5 h-3.5 inline-flex items-center justify-center rounded-sm text-[8px] font-bold uppercase",
+                      job === j.id
+                        ? j.id === "ozon"
+                          ? "bg-primary-foreground text-primary"
+                          : "border border-primary-foreground text-primary-foreground"
+                        : j.id === "ozon"
+                          ? "bg-foreground/80 text-background"
+                          : "border border-foreground/60 text-foreground/80",
+                    )}
+                  >
+                    {j.short}
+                  </span>
+                  <span className="truncate">{j.label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+              цикл
+            </span>
+            <div className="grid grid-cols-4 gap-1.5">
+              {SCHEDULE_PATTERNS.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => setPatternId(p.id)}
+                  className={cn(
+                    "h-8 rounded-md text-xs font-medium tabular-nums transition-colors border",
+                    patternId === p.id
+                      ? "bg-primary text-primary-foreground border-primary"
+                      : "border-border text-muted-foreground hover:text-foreground hover:bg-muted",
+                  )}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+              первый рабочий день
+            </span>
+            <NumericInput
+              value={startDay}
+              onChange={(v) => {
+                if (!v) {
+                  setStartDay("");
+                  return;
+                }
+                const num = parseInt(v, 10);
+                if (Number.isFinite(num)) {
+                  setStartDay(String(Math.max(1, Math.min(num, daysInMonth))));
+                }
+              }}
+              onSubmit={handleApply}
+              placeholder="1"
+            />
+          </div>
+
+          <div className="flex items-center justify-between gap-2 pt-1">
+            <button
+              type="button"
+              onClick={handleClear}
+              className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground hover:text-destructive transition-colors"
+            >
+              очистить
+            </button>
+            <button
+              type="button"
+              onClick={handleApply}
+              className="h-8 px-4 text-xs font-medium uppercase tracking-[0.15em] bg-primary text-primary-foreground rounded-md hover:opacity-90"
+            >
+              применить
+            </button>
+          </div>
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -398,6 +563,9 @@ export default function Calendar() {
     addObligation,
     updateObligation,
     removeObligation,
+    schedule,
+    applySchedule,
+    clearScheduleForMonth,
   } = useSalaryStore();
 
   const [currentDate, setCurrentDate] = useState(new Date());
@@ -439,6 +607,9 @@ export default function Calendar() {
     if (!entry) return [];
     return JOBS.filter((j) => (entry[j.id] ?? 0) > 0).map((j) => j.id);
   };
+
+  const getScheduledJobs = (date: Date): JobId[] =>
+    schedule[format(date, "yyyy-MM-dd")] || [];
 
   const getWeekTotal = (weekDays: Date[]) =>
     weekDays
@@ -516,7 +687,7 @@ export default function Calendar() {
         className="mx-auto w-full max-w-[1280px] h-full grid gap-3 min-h-0"
         style={{
           gridTemplateColumns: "minmax(0, 1fr) 240px 240px",
-          gridTemplateRows: "auto minmax(0, 1fr) auto",
+          gridTemplateRows: "auto minmax(0, 1fr)",
         }}
       >
         {/* Header bar */}
@@ -684,6 +855,12 @@ export default function Calendar() {
                     const amtDisplay = getDayInDisplay(day);
                     const hasEntry = amtRub > 0;
                     const jobsWorked = getJobsWorked(day);
+                    const jobsScheduled = getScheduledJobs(day);
+                    const visibleJobs = JOBS.filter(
+                      (j) =>
+                        jobsWorked.includes(j.id) ||
+                        jobsScheduled.includes(j.id),
+                    );
                     const key = format(day, "yyyy-MM-dd");
                     const isOpen = openKey === key;
                     const weekend = isWeekend(day);
@@ -744,21 +921,21 @@ export default function Calendar() {
                                 {format(day, "dd")}
                               </span>
 
-                              {/* Job tag markers */}
-                              {hasEntry && isCurrentMonth && (
+                              {/* Job tag markers (worked = full, scheduled-only = faded) */}
+                              {visibleJobs.length > 0 && isCurrentMonth && (
                                 <div className="flex items-center gap-0.5">
-                                  {JOBS.map((job) => {
-                                    const isOn = jobsWorked.includes(job.id);
-                                    if (!isOn) return null;
+                                  {visibleJobs.map((job) => {
+                                    const isWorked = jobsWorked.includes(job.id);
                                     return (
                                       <span
                                         key={job.id}
-                                        title={job.label}
+                                        title={`${job.label}${isWorked ? "" : " (план)"}`}
                                         className={cn(
-                                          "w-3.5 h-3.5 inline-flex items-center justify-center rounded-sm text-[8px] font-bold uppercase tracking-tight leading-none",
+                                          "w-3.5 h-3.5 inline-flex items-center justify-center rounded-sm text-[8px] font-bold uppercase tracking-tight leading-none transition-opacity",
                                           job.id === "ozon"
                                             ? "bg-foreground/80 text-background"
                                             : "border border-foreground/60 text-foreground/80",
+                                          !isWorked && "opacity-35",
                                         )}
                                       >
                                         {job.short}
@@ -873,22 +1050,47 @@ export default function Calendar() {
           className="grid gap-3 min-h-0"
           style={{ gridTemplateRows: "auto auto minmax(0, 1fr)" }}
         >
-          {/* Total tile */}
-          <Tile className="p-4">
-            <TileLabel>итого</TileLabel>
-            <div className="mt-2 text-[28px] font-semibold tracking-tight tabular-nums leading-none">
-              <MoneyTicker value={monthTotal} currency={currency} />
+          {/* Total tile (merged with stats) */}
+          <Tile>
+            <div className="px-4 pt-4 pb-3">
+              <TileLabel>итого</TileLabel>
+              <div className="mt-2 text-[28px] font-semibold tracking-tight tabular-nums leading-none">
+                <MoneyTicker value={monthTotal} currency={currency} />
+              </div>
+              <div className="mt-2 text-[11px] text-muted-foreground tabular-nums">
+                [{daysWithEntries.toString().padStart(2, "0")}/
+                {monthDays.length.toString().padStart(2, "0")}] дней
+              </div>
             </div>
-            <div className="mt-2 text-[11px] text-muted-foreground tabular-nums">
-              [{daysWithEntries.toString().padStart(2, "0")}/
-              {monthDays.length.toString().padStart(2, "0")}] дней
+            <div className="border-t border-border divide-y divide-border">
+              <div className="flex items-center justify-between px-4 py-2">
+                <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+                  среднее в день
+                </span>
+                <span className="text-xs font-semibold tabular-nums">
+                  <MoneyTicker value={averagePerDay} currency={currency} />
+                </span>
+              </div>
+              <div className="flex items-center justify-between px-4 py-2">
+                <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+                  лучший день
+                </span>
+                <span className="text-xs font-semibold tabular-nums">
+                  <MoneyTicker value={bestDay} currency={currency} />
+                </span>
+              </div>
             </div>
           </Tile>
 
-          {/* Per-job breakdown */}
+          {/* Per-job breakdown + schedule helper */}
           <Tile>
-            <div className="px-4 py-2 border-b border-border shrink-0">
+            <div className="px-4 py-2 border-b border-border shrink-0 flex items-center justify-between">
               <TileLabel>по работам</TileLabel>
+              <SchedulePicker
+                currentDate={currentDate}
+                onApply={applySchedule}
+                onClear={clearScheduleForMonth}
+              />
             </div>
             <ul className="divide-y divide-border">
               {JOBS.map((job) => (
@@ -970,30 +1172,6 @@ export default function Calendar() {
           onRemove={removeObligation}
         />
 
-        {/* Bottom stats bar */}
-        <div className="col-span-3 grid grid-cols-3 gap-3 min-h-0">
-          <Tile className="px-4 py-3">
-            <TileLabel>среднее в день</TileLabel>
-            <div className="mt-1 text-base font-semibold tabular-nums">
-              <MoneyTicker value={averagePerDay} currency={currency} />
-            </div>
-          </Tile>
-          <Tile className="px-4 py-3">
-            <TileLabel>лучший день</TileLabel>
-            <div className="mt-1 text-base font-semibold tabular-nums">
-              <MoneyTicker value={bestDay} currency={currency} />
-            </div>
-          </Tile>
-          <Tile className="px-4 py-3">
-            <TileLabel>записей</TileLabel>
-            <div className="mt-1 text-base font-semibold tabular-nums">
-              {formatNumber(daysWithEntries)}
-              <span className="text-muted-foreground">
-                {" "}/ {monthDays.length}
-              </span>
-            </div>
-          </Tile>
-        </div>
       </div>
     </div>
   );
