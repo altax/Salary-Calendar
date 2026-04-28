@@ -96,6 +96,8 @@ function makePendingIcon(opts: {
       font-weight: 700;
       letter-spacing: 0.02em;
       line-height: 1;
+      transform: rotate(var(--map-rotation, 0deg));
+      transform-origin: 50% 50%;
     ">${index}</div>
   `;
   return L.divIcon({
@@ -126,6 +128,8 @@ function makeDepotIcon(opts: { theme: "dark" | "light"; size?: number }) {
       font-size: 14px;
       font-weight: 700;
       line-height: 1;
+      transform: rotate(var(--map-rotation, 0deg));
+      transform-origin: 50% 50%;
     ">⌂</div>
   `;
   return L.divIcon({
@@ -156,6 +160,8 @@ function makeCheckIcon(opts: { theme: "dark" | "light"; size?: number }) {
       font-size: 13px;
       font-weight: 700;
       line-height: 1;
+      transform: rotate(var(--map-rotation, 0deg));
+      transform-origin: 50% 50%;
     ">✓</div>
   `;
   return L.divIcon({
@@ -186,6 +192,8 @@ function makeManeuverIcon(opts: { arrow: string; theme: "dark" | "light"; size?:
       font-size: 13px;
       font-weight: 700;
       line-height: 1;
+      transform: rotate(var(--map-rotation, 0deg));
+      transform-origin: 50% 50%;
     ">${arrow}</div>
   `;
   return L.divIcon({
@@ -314,6 +322,12 @@ export type DeliveryMapProps = {
   maneuvers?: ManeuverMarker[] | null;
   routeLegs?: RouteLegSegment[] | null;
   showRouteOverlay?: boolean;
+  /**
+   * When set, rotate the entire map so this bearing (heading in degrees,
+   * 0=N, 90=E) points UP. Used for course-up navigation in DriveMode.
+   * When null, map stays north-up.
+   */
+  bearing?: number | null;
 };
 
 export default function DeliveryMap({
@@ -345,6 +359,7 @@ export default function DeliveryMap({
   maneuvers,
   routeLegs,
   showRouteOverlay = true,
+  bearing = null,
 }: DeliveryMapProps) {
   const sortedDeliveries = useMemo(
     () =>
@@ -418,15 +433,42 @@ export default function DeliveryMap({
 
   const accentColor = theme === "dark" ? "#fafafa" : "#0a0a0a";
 
+  // For course-up rotation we wrap the map in an oversized (≈142%) rotated
+  // container so the rotated viewport always covers the visible area. The
+  // outer div clips the overflow. We pass the bearing to children via a
+  // CSS variable so divIcon HTML can counter-rotate (keep text upright).
+  const rotated = bearing != null && Number.isFinite(bearing);
+  const wrapperStyle: React.CSSProperties = rotated
+    ? {
+        position: "absolute",
+        left: "-21%",
+        top: "-21%",
+        width: "142%",
+        height: "142%",
+        transform: `rotate(${-(bearing as number)}deg)`,
+        transformOrigin: "50% 50%",
+        ["--map-rotation" as any]: `${bearing}deg`,
+      }
+    : { position: "relative", width: "100%", height: "100%" };
+
   return (
-    <div className={className} style={{ position: "relative", height: "100%", width: "100%" }}>
+    <div
+      className={className}
+      style={{
+        position: "relative",
+        height: "100%",
+        width: "100%",
+        overflow: rotated ? "hidden" : "visible",
+      }}
+    >
+      <div style={wrapperStyle}>
       <MapContainer
         center={depot ? [depot.lat, depot.lng] : SPB_CENTER}
         zoom={initialZoom}
-        scrollWheelZoom={interactive}
-        zoomControl={interactive}
-        dragging={interactive}
-        doubleClickZoom={interactive}
+        scrollWheelZoom={interactive && !rotated}
+        zoomControl={interactive && !rotated}
+        dragging={interactive && !rotated}
+        doubleClickZoom={interactive && !rotated}
         attributionControl={false}
         style={{ height: "100%", width: "100%", background: theme === "dark" ? "#0a0a0a" : "#f5f5f5" }}
       >
@@ -685,6 +727,45 @@ export default function DeliveryMap({
           </>
         )}
       </MapContainer>
+      </div>
+      {rotated && (
+        <div
+          aria-hidden
+          style={{
+            position: "absolute",
+            top: 8,
+            left: 8,
+            zIndex: 1000,
+            width: 32,
+            height: 32,
+            borderRadius: "50%",
+            background: theme === "dark" ? "rgba(20,20,20,0.85)" : "rgba(255,255,255,0.9)",
+            border: `1px solid ${theme === "dark" ? "#444" : "#bbb"}`,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontFamily: "'JetBrains Mono', monospace",
+            fontWeight: 700,
+            fontSize: 11,
+            color: theme === "dark" ? "#fafafa" : "#0a0a0a",
+            boxShadow: "0 2px 6px rgba(0,0,0,0.3)",
+            pointerEvents: "none",
+          }}
+          title="Север"
+        >
+          <span
+            style={{
+              display: "inline-block",
+              transform: `rotate(${-(bearing as number)}deg)`,
+              transformOrigin: "50% 50%",
+              lineHeight: 1,
+            }}
+          >
+            ▲<br />
+            <span style={{ fontSize: 8 }}>С</span>
+          </span>
+        </div>
+      )}
     </div>
   );
 }

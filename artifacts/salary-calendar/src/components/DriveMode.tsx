@@ -62,8 +62,9 @@ const ROUTE_VISIBLE_KEY = "salary-calendar:drive:route-visible";
 const STOPS_PANEL_KEY = "salary-calendar:drive:stops-open";
 const SIM_SPEED_KEY = "salary-calendar:drive:sim-speed";
 const SIM_TICK_MS = 250;
-const SIM_AUTOCOMPLETE_DELAY_MS = 1500;
+const SIM_AUTOCOMPLETE_DELAY_MS = 3000;
 const UNDO_WINDOW_MS = 5_000;
+const COURSE_UP_KEY = "salary-calendar:drive:course-up";
 const SIM_SPEED_PRESETS = [10, 30, 60, 120] as const;
 
 type Mode = "driving" | "returning" | "finished";
@@ -178,6 +179,12 @@ export default function DriveMode({
   const [lastCompleted, setLastCompleted] =
     useState<LastCompletedSnapshot | null>(null);
   const [, forceTick] = useState(0);
+  // Course-up rotation. When true and we have a heading, we rotate the map
+  // so the user's direction of travel always points up the screen.
+  const [courseUp, setCourseUp] = useState(() => loadBool(COURSE_UP_KEY, true));
+  // Smoothed heading for course-up rotation — raw GPS heading is jittery,
+  // so we low-pass-filter it to avoid the map spinning every tick.
+  const [smoothedHeading, setSmoothedHeading] = useState<number | null>(null);
 
   const voiceRef = useRef(createVoiceController(false));
   const announcerRef = useRef(new StepAnnouncer());
@@ -210,6 +217,24 @@ export default function DriveMode({
     } catch {}
   }, [simSpeedKmh]);
 
+  useEffect(() => {
+    saveBool(COURSE_UP_KEY, courseUp);
+  }, [courseUp]);
+
+  // Smooth heading: lerp toward the new GPS heading by 25% each update,
+  // and shortcut when the angular delta is large (>90°) so a hard turn
+  // doesn't take 2 seconds to register.
+  useEffect(() => {
+    const h = position?.heading;
+    if (h == null || !Number.isFinite(h)) return;
+    setSmoothedHeading((prev) => {
+      if (prev == null) return h;
+      let delta = ((h - prev + 540) % 360) - 180;
+      if (Math.abs(delta) > 90) return h;
+      return (prev + delta * 0.3 + 360) % 360;
+    });
+  }, [position?.heading]);
+
   // When the simulator is first enabled, drop the synthetic position at depot
   // (or wherever the real GPS last was, if we have a fix) so that the route
   // builder has somewhere to start from.
@@ -238,10 +263,15 @@ export default function DriveMode({
     if (mode !== "driving") return;
     if (pending.length === 0) return;
     if (routeRequest && routeRequest.kind === "delivery") {
-      // Rebuild only if NEW stop appeared (pending grew beyond what's in current route).
-      const knownIds = new Set(routeRequest.stopIds);
-      const hasNew = pending.some((p) => !knownIds.has(p.id));
-      if (!hasNew) return;
+      // Rebuild whenever the SET of pending stops changed (added, removed,
+      // or reordered). Removing a stop happens after every "✓ доставлено",
+      // and we want a fresh route from the current GPS to the remaining
+      // stops — otherwise the leftover original geometry shows a confusing
+      // blue line passing through the just-completed point.
+      const same =
+        routeRequest.stopIds.length === pending.length &&
+        routeRequest.stopIds.every((id, i) => id === pending[i]?.id);
+      if (same) return;
     }
     setRouteRequest({
       points: [
@@ -486,20 +516,44 @@ export default function DriveMode({
     pending,
   ]);
 
-  // Maneuvers for upcoming portion only
+  // Maneuvers for upcoming portion only. Show only the next 2 MEANINGFUL
+  // turns — straight-throughs, departures and arrivals are skipped because
+  // they read as noisy random arrows on the map ("the arrows look like they
+  // show wrong direction" feedback).
+  const MEANINGFUL_TYPES = useMemo(
+    () =>
+      new Set([
+        "turn",
+        "merge",
+        "fork",
+        "end of road",
+        "on ramp",
+        "off ramp",
+        "roundabout",
+        "rotary",
+        "exit roundabout",
+        "exit rotary",
+        "roundabout turn",
+      ]),
+    [],
+  );
   const maneuvers: ManeuverMarker[] | null = useMemo(() => {
     if (!routeIndex || !routeIndex.steps.length) return null;
     const startIdx = progress?.currentStepIndex ?? 0;
     const out: ManeuverMarker[] = [];
-    for (let i = startIdx; i < routeIndex.steps.length && out.length < 10; i += 1) {
+    for (let i = startIdx; i < routeIndex.steps.length && out.length < 2; i += 1) {
       const s = routeIndex.steps[i];
-      if (s.maneuver.type === "depart") continue;
-      const arr = maneuverArrow(s);
-      if (arr === "↑" && s.maneuver.type === "continue") continue;
-      out.push({ lat: s.maneuver.location[0], lng: s.maneuver.location[1], arrow: arr });
+      if (!MEANINGFUL_TYPES.has(s.maneuver.type)) continue;
+      const mod = s.maneuver.modifier;
+      if (s.maneuver.type === "turn" && mod === "straight") continue;
+      out.push({
+        lat: s.maneuver.location[0],
+        lng: s.maneuver.location[1],
+        arrow: maneuverArrow(s),
+      });
     }
     return out;
-  }, [routeIndex, progress?.currentStepIndex]);
+  }, [routeIndex, progress?.currentStepIndex, MEANINGFUL_TYPES]);
 
   const active = mode === "driving" ? pending[0] ?? null : null;
   const job = active ? jobs.find((j) => j.id === active.jobId) : undefined;
@@ -801,34 +855,46 @@ export default function DriveMode({
   return (
     <div className="fixed inset-0 z-[2000] bg-background text-foreground flex flex-col">
       {/* Top bar */}
-      <div className="shrink-0 h-14 px-3 flex items-center justify-between border-b border-border bg-card gap-2">
+      <div className="shrink-0 h-11 px-2 flex items-center justify-between border-b border-border bg-card gap-1.5">
         <button
           onClick={onExit}
-          className="h-10 px-3 rounded-md border border-border text-[11px] font-medium uppercase tracking-[0.2em] hover:bg-muted transition-colors"
+          className="h-8 px-2.5 rounded-md border border-border text-[10px] font-medium uppercase tracking-[0.18em] hover:bg-muted transition-colors"
         >
           ← выйти
         </button>
-        <div className="flex flex-col items-center min-w-0">
-          <div className="text-[9px] uppercase tracking-[0.25em] text-muted-foreground truncate">
+        <div className="flex flex-col items-center min-w-0 leading-none">
+          <div className="text-[8px] uppercase tracking-[0.22em] text-muted-foreground truncate">
             {mode === "driving"
-              ? "режим вождения"
+              ? "вождение"
               : mode === "returning"
-                ? "возврат в депо"
-                : "смена окончена"}
+                ? "→ депо"
+                : "готово"}
           </div>
-          <div className="text-[14px] font-semibold tabular-nums truncate">
+          <div className="text-[13px] font-semibold tabular-nums truncate mt-0.5">
             {mode === "driving" && totalStops > 0
               ? `${stopNumber} / ${totalStops}`
               : mode === "returning"
-                ? "→ депо"
-                : "✓ готово"}
+                ? "возврат"
+                : "✓"}
           </div>
         </div>
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setCourseUp((v) => !v)}
+            className={cn(
+              "h-8 w-8 rounded-md border text-[13px] transition-colors flex items-center justify-center",
+              courseUp
+                ? "border-primary bg-primary/10 text-foreground"
+                : "border-border text-muted-foreground hover:bg-muted",
+            )}
+            title={courseUp ? "Карта по курсу — выкл" : "Карта по курсу — вкл"}
+          >
+            {courseUp ? "↥" : "N"}
+          </button>
           <button
             onClick={() => setRouteVisible((v) => !v)}
             className={cn(
-              "h-10 w-10 rounded-md border text-[14px] transition-colors flex items-center justify-center",
+              "h-8 w-8 rounded-md border text-[13px] transition-colors flex items-center justify-center",
               routeVisible
                 ? "border-primary bg-primary/10 text-foreground"
                 : "border-border text-muted-foreground hover:bg-muted",
@@ -840,7 +906,7 @@ export default function DriveMode({
           <button
             onClick={() => setMuted((m) => !m)}
             className={cn(
-              "h-10 w-10 rounded-md border text-[14px] transition-colors flex items-center justify-center",
+              "h-8 w-8 rounded-md border text-[13px] transition-colors flex items-center justify-center",
               muted
                 ? "border-border text-muted-foreground hover:bg-muted"
                 : "border-primary bg-primary/10 text-foreground",
@@ -909,14 +975,35 @@ export default function DriveMode({
         </div>
       )}
 
+      {/* Arrival banner — replaces the maneuver card the moment we trigger
+          arrival, so the courier sees a big unmistakable "ВЫ ПРИБЫЛИ" instead
+          of stale turn instructions while the completion modal is up. */}
+      {completing && mode === "driving" && active && (
+        <div className="shrink-0 px-3 pt-2">
+          <div className="rounded-lg border-2 border-emerald-500 bg-emerald-500/15 px-3 py-2 flex items-center gap-3">
+            <div className="shrink-0 w-10 h-10 rounded-md bg-emerald-500 text-white flex items-center justify-center text-[22px] font-bold leading-none">
+              ✓
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-[9px] uppercase tracking-[0.25em] text-emerald-700 dark:text-emerald-400 font-semibold">
+                вы прибыли
+              </div>
+              <div className="text-[15px] font-semibold leading-tight truncate">
+                {active.address || "к точке доставки"}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Maneuver card */}
-      {currentStep && mode !== "finished" && (
-        <div className="shrink-0 px-3 pt-3">
+      {currentStep && mode !== "finished" && !completing && (
+        <div className="shrink-0 px-3 pt-2">
           <div
             className={cn(
-              "rounded-xl border bg-card px-4 py-3 flex items-center gap-4 transition-all",
+              "rounded-lg border bg-card px-2.5 py-2 flex items-center gap-2.5 transition-all",
               maneuverUrgency === "near"
-                ? "border-red-500/70 ring-2 ring-red-500/30"
+                ? "border-red-500/70 ring-1 ring-red-500/30"
                 : maneuverUrgency === "mid"
                   ? "border-amber-500/60"
                   : "border-border",
@@ -924,7 +1011,7 @@ export default function DriveMode({
           >
             <div
               className={cn(
-                "shrink-0 w-16 h-16 rounded-lg flex items-center justify-center text-[32px] leading-none font-bold",
+                "shrink-0 w-11 h-11 rounded-md flex items-center justify-center text-[24px] leading-none font-bold",
                 maneuverUrgency === "near"
                   ? "bg-red-500 text-white"
                   : maneuverUrgency === "mid"
@@ -935,29 +1022,29 @@ export default function DriveMode({
               {arrow}
             </div>
             <div className="flex-1 min-w-0">
-              <div className="text-[10px] uppercase tracking-[0.25em] text-muted-foreground">
+              <div className="text-[9px] uppercase tracking-[0.22em] text-muted-foreground leading-none">
                 {currentStep.maneuver.type === "arrive"
                   ? mode === "returning"
                     ? "прибытие в депо"
                     : "прибытие к точке"
-                  : "следующий манёвр"}
+                  : "манёвр"}
               </div>
-              <div className="text-[22px] font-semibold leading-tight truncate">
+              <div className="text-[16px] font-semibold leading-tight truncate mt-0.5">
                 {instruction || (currentStep.name || "продолжайте")}
               </div>
               {nextStep && (
-                <div className="text-[11px] text-muted-foreground truncate mt-0.5">
+                <div className="text-[10px] text-muted-foreground truncate leading-none mt-0.5">
                   потом · {maneuverInstruction(nextStep).toLowerCase()}
                 </div>
               )}
             </div>
             <div className="shrink-0 text-right">
-              <div className="text-[10px] uppercase tracking-[0.25em] text-muted-foreground">
+              <div className="text-[9px] uppercase tracking-[0.22em] text-muted-foreground leading-none">
                 через
               </div>
               <div
                 className={cn(
-                  "text-[26px] font-semibold tabular-nums leading-tight",
+                  "text-[20px] font-semibold tabular-nums leading-tight mt-0.5",
                   maneuverUrgency === "near" && "text-red-500",
                   maneuverUrgency === "mid" && "text-amber-500",
                 )}
@@ -988,6 +1075,11 @@ export default function DriveMode({
           routeLegs={routeLegs}
           maneuvers={maneuvers}
           showRouteOverlay={routeVisible}
+          bearing={
+            courseUp && (mode === "driving" || mode === "returning")
+              ? smoothedHeading
+              : null
+          }
         />
 
         {/* Stops side panel toggle */}

@@ -122,9 +122,11 @@ export class OsrmProvider implements RoutingProvider {
     if (points.length < 2) throw new Error("routing: need at least 2 points");
     const coords = this.encodeCoords(points);
     const { base, pathProfile } = this.endpoint();
-    // continue_straight=false is friendlier for bikes/pedestrians (they can
-    // turn around easily, no need to force a long detour).
-    const url = `${base}/route/v1/${pathProfile}/${coords}?overview=full&steps=true&geometries=geojson&annotations=false&continue_straight=false`;
+    // continue_straight=false is friendlier for bikes (they can turn around
+    // easily, no need to force a long detour). snapping=any lets OSRM snap
+    // to ANY road including ones marked as not-default-snappable — important
+    // for bikes that can use cycleways/footways the car profile would skip.
+    const url = `${base}/route/v1/${pathProfile}/${coords}?overview=full&steps=true&geometries=geojson&annotations=false&continue_straight=false&snapping=any`;
     try {
       const res = await fetch(url);
       if (!res.ok) throw new Error(`routing: ${res.status} ${res.statusText}`);
