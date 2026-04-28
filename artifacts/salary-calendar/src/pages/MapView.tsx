@@ -186,6 +186,35 @@ export default function MapView() {
     [deliveriesStore.deliveries, filterJob, range, queryDate],
   );
 
+  // Set of delivery IDs that belong to a FINISHED wave. These are hidden
+  // from the map by default — the user re-summons them by clicking the
+  // corresponding wave card in the "готово" tab.
+  const finishedWaveDeliveryIds = useMemo(() => {
+    const set = new Set<string>();
+    for (const w of wavesStore.finishedWaves) {
+      for (const s of w.stops) if (s.deliveryId) set.add(s.deliveryId);
+    }
+    return set;
+  }, [wavesStore.finishedWaves]);
+
+  // What actually goes on the map. Three modes:
+  //  • A finished wave is selected → ONLY that wave's deliveries (matched by
+  //    deliveryId or coordinates).
+  //  • No wave selected → strip out all finished-wave deliveries so the map
+  //    shows just the active wave + orphan history.
+  //  • While inside the active wave → everything visible (current behavior).
+  const mapDeliveries = useMemo(() => {
+    if (isViewingFinishedWave && visibleWave) {
+      return visibleDeliveries.filter(
+        (d) =>
+          !!visibleWave.stops.find(
+            (s) => s.deliveryId === d.id || (s.lat === d.lat && s.lng === d.lng),
+          ),
+      );
+    }
+    return visibleDeliveries.filter((d) => !finishedWaveDeliveryIds.has(d.id));
+  }, [visibleDeliveries, isViewingFinishedWave, visibleWave, finishedWaveDeliveryIds]);
+
   const sortedVisible = useMemo(
     () => visibleDeliveries.slice().sort((a, b) => b.timestamp - a.timestamp),
     [visibleDeliveries],
@@ -385,17 +414,7 @@ export default function MapView() {
 
         <div className="rounded-2xl border border-border bg-card overflow-hidden relative">
           <DeliveryMap
-            deliveries={
-              isViewingFinishedWave
-                ? // When viewing a finished wave, hide unrelated history points
-                  visibleDeliveries.filter(
-                    (d) =>
-                      !!visibleWave?.stops.find(
-                        (s) => s.deliveryId === d.id || (s.lat === d.lat && s.lng === d.lng),
-                      ),
-                  )
-                : visibleDeliveries
-            }
+            deliveries={mapDeliveries}
             pending={isViewingFinishedWave ? [] : pendingForUi}
             jobs={salary.jobs}
             theme={salary.theme}
@@ -417,13 +436,10 @@ export default function MapView() {
           />
           <WaveTabs
             activeWave={wavesStore.activeWave}
-            finishedWaves={wavesStore.finishedWaves}
             selectedWaveId={wavesStore.selectedWaveId}
-            onSelect={(id) => wavesStore.setSelectedWaveId(id)}
+            onClearSelection={() => wavesStore.setSelectedWaveId(null)}
             onFinishActive={() => wavesStore.finishActiveWave()}
             onStartNew={() => wavesStore.startNewWave()}
-            onReopen={(id) => wavesStore.reopenWave(id)}
-            onDelete={(id) => wavesStore.deleteWave(id)}
           />
           <div className="absolute bottom-3 left-3 z-[400] pointer-events-none">
             <div className="rounded-md bg-background/85 backdrop-blur-sm border border-border px-2.5 py-1.5 text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
@@ -453,6 +469,11 @@ export default function MapView() {
           shifts={salary.shifts}
           onSetShiftActive={salary.setShiftActive}
           isShiftActive={salary.isShiftActive}
+          finishedWaves={wavesStore.finishedWaves}
+          selectedWaveId={wavesStore.selectedWaveId}
+          onSelectWave={(id) => wavesStore.setSelectedWaveId(id)}
+          onReopenWave={(id) => wavesStore.reopenWave(id)}
+          onDeleteWave={(id) => wavesStore.deleteWave(id)}
           onSelect={(id, lat, lng) => {
             setSelectedId(id);
             setFlyTo({ lat, lng, zoom: 16 });
@@ -767,6 +788,11 @@ type SidebarProps = {
   shifts: Record<string, Partial<Record<JobId, boolean>>>;
   onSetShiftActive: (dateIso: string, jobId: JobId, active: boolean) => void;
   isShiftActive: (dateIso: string, jobId: JobId) => boolean;
+  finishedWaves: Wave[];
+  selectedWaveId: string | null;
+  onSelectWave: (id: string | null) => void;
+  onReopenWave: (id: string) => void;
+  onDeleteWave: (id: string) => void;
   onSelect: (id: string, lat: number, lng: number) => void;
   onRemoveDelivery: (id: string) => void;
   onRemovePending: (id: string) => void;
@@ -779,6 +805,11 @@ function Sidebar(props: SidebarProps) {
   const [tab, setTab] = useState<"pending" | "done">(
     props.pending.length > 0 ? "pending" : "done",
   );
+  // If a finished wave gets selected from outside (e.g. via DriveMode), jump
+  // to the "готово" tab automatically so the user sees what's highlighted.
+  useEffect(() => {
+    if (props.selectedWaveId) setTab("done");
+  }, [props.selectedWaveId]);
   const today = TODAY_ISO();
   const jobsWithBonus = props.jobs.filter((j) => j.shiftBonusRub > 0);
 
@@ -851,7 +882,7 @@ function Sidebar(props: SidebarProps) {
           маршрут · {props.pending.length}
         </TabButton>
         <TabButton active={tab === "done"} onClick={() => setTab("done")}>
-          готово · {props.deliveries.length}
+          готово · {props.finishedWaves.length}
         </TabButton>
       </div>
 
@@ -869,12 +900,13 @@ function Sidebar(props: SidebarProps) {
           onStartDriving={props.onStartDriving}
         />
       ) : (
-        <DeliveriesList
-          deliveries={props.deliveries}
+        <FinishedWavesList
+          waves={props.finishedWaves}
+          selectedWaveId={props.selectedWaveId}
           jobs={props.jobs}
-          selectedId={props.selectedId}
-          onSelect={props.onSelect}
-          onRemove={props.onRemoveDelivery}
+          onSelect={props.onSelectWave}
+          onReopen={props.onReopenWave}
+          onDelete={props.onDeleteWave}
         />
       )}
     </div>
@@ -914,28 +946,30 @@ function TabButton({
   );
 }
 
-function DeliveriesList({
-  deliveries,
+function FinishedWavesList({
+  waves,
+  selectedWaveId,
   jobs,
-  selectedId,
   onSelect,
-  onRemove,
+  onReopen,
+  onDelete,
 }: {
-  deliveries: Delivery[];
+  waves: Wave[];
+  selectedWaveId: string | null;
   jobs: ResolvedJob[];
-  selectedId: string | null;
-  onSelect: (id: string, lat: number, lng: number) => void;
-  onRemove: (id: string) => void;
+  onSelect: (id: string | null) => void;
+  onReopen: (id: string) => void;
+  onDelete: (id: string) => void;
 }) {
   const jobMap = new Map(jobs.map((j) => [j.id, j]));
-  if (deliveries.length === 0) {
+  if (waves.length === 0) {
     return (
       <div className="flex-1 flex items-center justify-center px-6 text-center">
         <div className="text-[11px] text-muted-foreground leading-relaxed">
-          нет доставок в этом фильтре
+          ещё нет завершённых волн
           <br />
           <span className="text-muted-foreground/70 text-[10px]">
-            тапни по карте чтобы добавить
+            закончи текущую волну, чтобы она появилась здесь
           </span>
         </div>
       </div>
@@ -943,45 +977,93 @@ function DeliveriesList({
   }
   return (
     <ul className="flex-1 overflow-y-auto divide-y divide-border">
-      {deliveries.map((d, i) => {
-        const job = jobMap.get(d.jobId);
-        const total = deliveries.length;
+      {waves.map((w, i) => {
+        const sel = selectedWaveId === w.id;
+        const delivered = w.stops.filter((s) => s.status === "delivered");
+        const total = w.stops.length;
+        const earnings = delivered.reduce((sum, s) => {
+          if (typeof s.amountRub === "number") return sum + s.amountRub;
+          const job = jobMap.get(s.jobId);
+          return sum + (s.priceRub ?? job?.perOrderRateRub ?? 0);
+        }, 0);
+        const km = w.delivery?.distanceM ? w.delivery.distanceM / 1000 : null;
+        const finishedAt = w.finishedAt ? new Date(w.finishedAt) : null;
+        const startedAt = new Date(w.startedAt);
+        // Wave numbers count from oldest = 1; the array is newest-first.
+        const waveNumber = waves.length - i;
         return (
-          <li
-            key={d.id}
-            className={cn(
-              "px-4 py-2.5 flex items-start gap-3 hover-elevate group cursor-pointer",
-              selectedId === d.id && "bg-foreground/[0.04]",
-            )}
-            onClick={() => onSelect(d.id, d.lat, d.lng)}
-          >
-            <span className="text-[10px] tabular-nums text-muted-foreground w-5 mt-0.5">
-              {String(total - i).padStart(2, "0")}
-            </span>
-            <div className="flex-1 min-w-0">
+          <li key={w.id} className="border-b border-border last:border-b-0">
+            <button
+              type="button"
+              onClick={() => onSelect(sel ? null : w.id)}
+              className={cn(
+                "w-full text-left px-4 py-3 flex flex-col gap-1.5 transition-colors",
+                sel ? "bg-foreground/[0.06]" : "hover:bg-muted/40",
+              )}
+              title={sel ? "Скрыть с карты" : "Показать маршрут на карте"}
+            >
               <div className="flex items-baseline justify-between gap-2">
-                <span className="text-[11px] tabular-nums text-foreground">
-                  {format(new Date(d.timestamp), "d MMM · HH:mm", { locale: ru })}
+                <span className="text-[11px] uppercase tracking-[0.18em] font-semibold text-foreground">
+                  волна {waveNumber}
+                  {sel && (
+                    <span className="ml-2 text-[9px] text-primary">● на карте</span>
+                  )}
                 </span>
                 <span className="text-[12px] font-semibold tabular-nums">
-                  {Math.round(d.amountRub)} ₽
+                  {Math.round(earnings)} ₽
                 </span>
               </div>
-              <div className="text-[10px] text-muted-foreground truncate">
-                {job?.label || d.jobId}
-                {d.address && <> · {d.address}</>}
+              <div className="flex items-center justify-between gap-2 text-[10px] text-muted-foreground tabular-nums">
+                <span>
+                  {format(startedAt, "d MMM", { locale: ru })}
+                  {finishedAt && (
+                    <>
+                      {" · "}
+                      {format(startedAt, "HH:mm", { locale: ru })}–
+                      {format(finishedAt, "HH:mm", { locale: ru })}
+                    </>
+                  )}
+                </span>
+                <span>
+                  {delivered.length}/{total} точек
+                  {km !== null && <> · {km.toFixed(1)} км</>}
+                </span>
               </div>
-            </div>
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onRemove(d.id);
-              }}
-              className="opacity-0 group-hover:opacity-100 text-[10px] uppercase tracking-[0.2em] text-muted-foreground hover:text-destructive transition-opacity"
-              title="Удалить"
-            >
-              ×
             </button>
+            {sel && (
+              <div className="px-4 pb-3 pt-1 flex items-center gap-2 bg-foreground/[0.06]">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onSelect(null);
+                  }}
+                  className="h-7 px-2.5 text-[10px] uppercase tracking-[0.18em] rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                  title="Скрыть маршрут с карты"
+                >
+                  ✕ скрыть
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onReopen(w.id);
+                  }}
+                  className="h-7 px-2.5 text-[10px] uppercase tracking-[0.18em] rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                  title="Вернуть как активную волну"
+                >
+                  ↻ возобновить
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (confirm("Удалить эту волну из архива?")) onDelete(w.id);
+                  }}
+                  className="h-7 px-2.5 text-[10px] uppercase tracking-[0.18em] rounded-md border border-border text-red-500 hover:bg-muted ml-auto transition-colors"
+                  title="Удалить из архива"
+                >
+                  удалить
+                </button>
+              </div>
+            )}
           </li>
         );
       })}
@@ -1461,85 +1543,64 @@ function DepotEditDialog({
   );
 }
 
+// Slim floating bar over the map: shows the ACTIVE wave indicator + start/
+// finish controls, and a "back to active" button when the user is previewing
+// a finished wave from the "готово" tab. Finished-wave chips themselves now
+// live in the sidebar's "готово" tab.
 function WaveTabs({
   activeWave,
-  finishedWaves,
   selectedWaveId,
-  onSelect,
+  onClearSelection,
   onFinishActive,
   onStartNew,
-  onReopen,
-  onDelete,
 }: {
   activeWave: Wave | null;
-  finishedWaves: Wave[];
   selectedWaveId: string | null;
-  onSelect: (id: string | null) => void;
+  onClearSelection: () => void;
   onFinishActive: () => void;
   onStartNew: () => void;
-  onReopen: (id: string) => void;
-  onDelete: (id: string) => void;
 }) {
-  if (!activeWave && finishedWaves.length === 0) return null;
   const activePending = activeWave?.stops.filter((s) => s.status === "pending").length ?? 0;
   const activeDone = activeWave?.stops.filter((s) => s.status === "delivered").length ?? 0;
-  const isActiveSelected = !selectedWaveId && !!activeWave;
+  const previewingFinished = !!selectedWaveId;
+
+  // If there's nothing to show, render nothing.
+  if (!activeWave && !previewingFinished) return null;
 
   return (
     <div className="absolute top-3 left-3 right-3 z-[450] pointer-events-none">
       <div className="pointer-events-auto rounded-md bg-background/90 backdrop-blur-sm border border-border shadow-lg overflow-x-auto">
         <div className="flex items-stretch divide-x divide-border min-w-min">
-          {activeWave && (
+          {previewingFinished && (
             <button
-              onClick={() => onSelect(null)}
+              onClick={onClearSelection}
+              className="px-3 py-2 text-[10px] uppercase tracking-[0.18em] flex items-center gap-2 whitespace-nowrap text-primary hover:bg-muted transition-colors"
+              title="Скрыть архивную волну с карты"
+            >
+              ← к активной
+            </button>
+          )}
+          {activeWave && (
+            <div
               className={cn(
-                "px-3 py-2 text-[10px] uppercase tracking-[0.18em] flex items-center gap-2 whitespace-nowrap transition-colors",
-                isActiveSelected
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                "px-3 py-2 text-[10px] uppercase tracking-[0.18em] flex items-center gap-2 whitespace-nowrap",
+                previewingFinished ? "text-muted-foreground" : "text-foreground",
               )}
               title="Текущая волна заказов"
             >
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
               <span className="font-semibold">волна · в работе</span>
-              <span className="text-[10px] opacity-70">
+              <span className="opacity-70">
                 {activeDone}/{activeDone + activePending}
               </span>
-            </button>
+            </div>
           )}
-          {finishedWaves.slice(0, 8).map((w, i) => {
-            const sel = selectedWaveId === w.id;
-            const done = w.stops.filter((s) => s.status === "delivered").length;
-            const total = w.stops.length;
-            const finishedAt = w.finishedAt ? new Date(w.finishedAt) : null;
-            const label = finishedAt
-              ? `${String(finishedAt.getHours()).padStart(2, "0")}:${String(finishedAt.getMinutes()).padStart(2, "0")}`
-              : "—";
-            return (
-              <button
-                key={w.id}
-                onClick={() => onSelect(w.id)}
-                className={cn(
-                  "px-3 py-2 text-[10px] uppercase tracking-[0.18em] flex items-center gap-2 whitespace-nowrap transition-colors",
-                  sel
-                    ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:bg-muted hover:text-foreground",
-                )}
-                title={`Волна ${finishedWaves.length - i}: ${done}/${total} доставлено в ${label}`}
-              >
-                <span className="font-semibold">волна {finishedWaves.length - i}</span>
-                <span className="opacity-70">
-                  {done}/{total} · {label}
-                </span>
-              </button>
-            );
-          })}
           <div className="ml-auto flex items-stretch divide-x divide-border">
             {activeWave && activePending === 0 && activeDone > 0 && (
               <button
                 onClick={onFinishActive}
                 className="px-3 py-2 text-[10px] uppercase tracking-[0.18em] text-emerald-600 dark:text-emerald-400 hover:bg-muted whitespace-nowrap"
-                title="Завершить текущую волну (можно открыть как новую)"
+                title="Завершить текущую волну (она появится во вкладке «готово»)"
               >
                 ✓ завершить волну
               </button>
@@ -1569,28 +1630,6 @@ function WaveTabs({
               >
                 + новая волна
               </button>
-            )}
-            {selectedWaveId && (
-              <>
-                <button
-                  onClick={() => onReopen(selectedWaveId)}
-                  className="px-3 py-2 text-[10px] uppercase tracking-[0.18em] text-muted-foreground hover:text-foreground hover:bg-muted whitespace-nowrap"
-                  title="Возобновить эту волну (станет активной)"
-                >
-                  ↻ возобновить
-                </button>
-                <button
-                  onClick={() => {
-                    if (confirm("Удалить эту волну из архива?")) {
-                      onDelete(selectedWaveId);
-                    }
-                  }}
-                  className="px-3 py-2 text-[10px] uppercase tracking-[0.18em] text-red-500 hover:bg-muted whitespace-nowrap"
-                  title="Удалить из архива"
-                >
-                  ✕
-                </button>
-              </>
             )}
           </div>
         </div>
