@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import {
   format,
   startOfMonth,
@@ -13,6 +13,10 @@ import {
   isWeekend,
   setMonth,
   setYear,
+  isBefore,
+  isAfter,
+  subDays,
+  parseISO,
 } from "date-fns";
 import { ru } from "date-fns/locale";
 import { motion, AnimatePresence } from "framer-motion";
@@ -169,7 +173,7 @@ function SchedulePicker({
     startDayInMonth: number,
     monthDate: Date,
   ) => void;
-  onClear: (jobId: JobId, monthDate: Date) => void;
+  onClear: (jobId: JobId) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [job, setJob] = useState<JobId>("ozon");
@@ -193,7 +197,7 @@ function SchedulePicker({
   };
 
   const handleClear = () => {
-    onClear(job, currentDate);
+    onClear(job);
     setOpen(false);
   };
 
@@ -296,6 +300,9 @@ function SchedulePicker({
               onSubmit={handleApply}
               placeholder="1"
             />
+            <span className="block text-[9px] text-muted-foreground/70 leading-tight">
+              цикл продолжится автоматически в следующих месяцах
+            </span>
           </div>
 
           <div className="flex items-center justify-between gap-2 pt-1">
@@ -324,6 +331,7 @@ function ObligationsPanel({
   obligations,
   currency,
   convert,
+  freeAmount,
   onAdd,
   onUpdate,
   onRemove,
@@ -331,6 +339,7 @@ function ObligationsPanel({
   obligations: Obligation[];
   currency: Currency;
   convert: (amount: number, from: Currency, to: Currency) => number;
+  freeAmount: number;
   onAdd: (name: string, amount: number, currency: Currency) => void;
   onUpdate: (
     id: string,
@@ -539,16 +548,282 @@ function ObligationsPanel({
       </ul>
 
       {obligations.length > 0 && (
-        <div className="px-4 py-2.5 border-t border-border shrink-0 flex items-center justify-between bg-muted/20">
-          <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
-            всего
-          </span>
-          <span className="text-sm font-semibold tabular-nums">
-            <MoneyTicker value={total} currency={currency} />
-          </span>
+        <div className="border-t border-border shrink-0 bg-muted/20 divide-y divide-border">
+          <div className="px-4 py-2 flex items-center justify-between">
+            <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+              всего
+            </span>
+            <span className="text-sm font-semibold tabular-nums">
+              <MoneyTicker value={total} currency={currency} />
+            </span>
+          </div>
+          <div className="px-4 py-2 flex items-center justify-between">
+            <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+              {freeAmount >= 0 ? "свободно" : "не хватает"}
+            </span>
+            <span
+              className={cn(
+                "text-sm font-semibold tabular-nums",
+                freeAmount < 0 && "text-destructive",
+              )}
+            >
+              <MoneyTicker
+                value={Math.abs(freeAmount)}
+                currency={currency}
+              />
+            </span>
+          </div>
         </div>
       )}
     </div>
+  );
+}
+
+function ThemeToggle({
+  theme,
+  onToggle,
+}: {
+  theme: "dark" | "light";
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      onClick={onToggle}
+      aria-label={theme === "dark" ? "Светлая тема" : "Тёмная тема"}
+      title={theme === "dark" ? "Светлая тема" : "Тёмная тема"}
+      className="h-7 w-7 flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted rounded-md transition-colors text-xs"
+    >
+      {theme === "dark" ? "☀" : "☾"}
+    </button>
+  );
+}
+
+function GoalEditor({
+  goalRub,
+  currency,
+  convert,
+  onSet,
+  onClear,
+}: {
+  goalRub: number | null;
+  currency: Currency;
+  convert: (amount: number, from: Currency, to: Currency) => number;
+  onSet: (amount: number, currency: Currency) => void;
+  onClear: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [val, setVal] = useState("");
+  const displayGoal = goalRub != null ? convert(goalRub, "RUB", currency) : 0;
+
+  useEffect(() => {
+    if (open) {
+      setVal(goalRub != null ? String(Math.round(displayGoal)) : "");
+    }
+  }, [open]);
+
+  const handleSave = () => {
+    const num = parseInt(val || "0", 10);
+    if (!Number.isFinite(num) || num <= 0) {
+      onClear();
+    } else {
+      onSet(num, currency);
+    }
+    setOpen(false);
+  };
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          className="text-[10px] font-medium uppercase tracking-[0.2em] text-muted-foreground hover:text-foreground transition-colors"
+          aria-label="Цель на месяц"
+        >
+          {goalRub != null ? "цель ✓" : "+ цель"}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" sideOffset={8} className="w-[240px] p-3">
+        <div className="space-y-2.5">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+              цель на месяц
+            </span>
+            <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+              {currency}
+            </span>
+          </div>
+          <NumericInput
+            autoFocus
+            value={val}
+            onChange={setVal}
+            onSubmit={handleSave}
+            placeholder="например 150000"
+          />
+          <div className="flex items-center justify-between gap-2 pt-1">
+            <button
+              type="button"
+              onClick={() => {
+                onClear();
+                setOpen(false);
+              }}
+              className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground hover:text-destructive transition-colors"
+            >
+              убрать
+            </button>
+            <button
+              type="button"
+              onClick={handleSave}
+              className="h-8 px-4 text-xs font-medium uppercase tracking-[0.15em] bg-primary text-primary-foreground rounded-md hover:opacity-90"
+            >
+              сохранить
+            </button>
+          </div>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+type ExportData = ReturnType<ReturnType<typeof useSalaryStore>["exportData"]>;
+
+function DataMenu({
+  exportData,
+  importData,
+  buildCsv,
+  buildSummary,
+}: {
+  exportData: () => ExportData;
+  importData: (data: unknown) => boolean;
+  buildCsv: () => string;
+  buildSummary: () => string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [feedback, setFeedback] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const flash = (msg: string) => {
+    setFeedback(msg);
+    setTimeout(() => setFeedback(null), 1500);
+  };
+
+  const downloadFile = (
+    content: string,
+    name: string,
+    mime: string,
+  ) => {
+    const blob = new Blob([content], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleBackup = () => {
+    const data = exportData();
+    const ts = format(new Date(), "yyyy-MM-dd");
+    downloadFile(
+      JSON.stringify(data, null, 2),
+      `ledger-backup-${ts}.json`,
+      "application/json",
+    );
+    flash("сохранено");
+  };
+
+  const handleCsv = () => {
+    const ts = format(new Date(), "yyyy-MM");
+    downloadFile(buildCsv(), `ledger-${ts}.csv`, "text/csv;charset=utf-8");
+    flash("CSV сохранён");
+  };
+
+  const handleCopySummary = async () => {
+    try {
+      await navigator.clipboard.writeText(buildSummary());
+      flash("скопировано");
+    } catch {
+      flash("не удалось");
+    }
+  };
+
+  const handleRestore = () => {
+    fileRef.current?.click();
+  };
+
+  const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      const ok = importData(parsed);
+      flash(ok ? "восстановлено" : "ошибка файла");
+    } catch {
+      flash("ошибка файла");
+    }
+    e.target.value = "";
+    setOpen(false);
+  };
+
+  return (
+    <>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <button
+            className="h-7 w-7 flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted rounded-md transition-colors text-base leading-none"
+            aria-label="Меню данных"
+          >
+            ⋯
+          </button>
+        </PopoverTrigger>
+        <PopoverContent align="end" sideOffset={8} className="w-[200px] p-1">
+          <div className="flex flex-col">
+            <MenuItem onClick={handleCopySummary} label="скопировать сводку" hint="буфер" />
+            <MenuItem onClick={handleCsv} label="экспорт месяца" hint=".csv" />
+            <MenuItem onClick={handleBackup} label="резервная копия" hint=".json" />
+            <MenuItem onClick={handleRestore} label="восстановить" hint=".json" />
+            {feedback && (
+              <div className="px-3 py-2 text-[10px] uppercase tracking-[0.2em] text-muted-foreground border-t border-border mt-1">
+                {feedback}
+              </div>
+            )}
+          </div>
+        </PopoverContent>
+      </Popover>
+      <input
+        ref={fileRef}
+        type="file"
+        accept="application/json,.json"
+        onChange={handleFile}
+        className="hidden"
+      />
+    </>
+  );
+}
+
+function MenuItem({
+  onClick,
+  label,
+  hint,
+}: {
+  onClick: () => void;
+  label: string;
+  hint?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex items-center justify-between gap-3 px-3 py-2 text-left rounded-md hover:bg-muted transition-colors"
+    >
+      <span className="text-[11px] truncate">{label}</span>
+      {hint && (
+        <span className="text-[9px] uppercase tracking-[0.2em] text-muted-foreground shrink-0">
+          {hint}
+        </span>
+      )}
+    </button>
   );
 }
 
@@ -563,9 +838,18 @@ export default function Calendar() {
     addObligation,
     updateObligation,
     removeObligation,
-    schedule,
-    applySchedule,
-    clearScheduleForMonth,
+    scheduleAnchors,
+    applyScheduleAnchor,
+    clearScheduleForJob,
+    toggleScheduleDay,
+    getScheduledJobsFor,
+    goalRub,
+    setGoal,
+    clearGoal,
+    theme,
+    toggleTheme,
+    exportData,
+    importData,
   } = useSalaryStore();
 
   const [currentDate, setCurrentDate] = useState(new Date());
@@ -608,9 +892,6 @@ export default function Calendar() {
     return JOBS.filter((j) => (entry[j.id] ?? 0) > 0).map((j) => j.id);
   };
 
-  const getScheduledJobs = (date: Date): JobId[] =>
-    schedule[format(date, "yyyy-MM-dd")] || [];
-
   const getWeekTotal = (weekDays: Date[]) =>
     weekDays
       .filter((d) => isSameMonth(d, currentDate))
@@ -640,6 +921,8 @@ export default function Calendar() {
     return best;
   }, [monthDays, entries, currency, convert]);
 
+  const today = new Date();
+
   // Per-job monthly totals for the sidebar breakdown
   const perJobMonthTotal = useMemo(() => {
     const totals: Record<JobId, number> = { ozon: 0, dostaevsky: 0 };
@@ -656,6 +939,121 @@ export default function Calendar() {
     return totals;
   }, [monthDays, entries, currency, convert]);
 
+  // Per-job: average earned on a worked day (used as placeholder hint)
+  const perJobDailyAverage = useMemo(() => {
+    const sums: Record<JobId, number> = { ozon: 0, dostaevsky: 0 };
+    const counts: Record<JobId, number> = { ozon: 0, dostaevsky: 0 };
+    for (const d of monthDays) {
+      const entry = getDayEntry(d);
+      if (!entry) continue;
+      for (const job of JOBS) {
+        const v = entry[job.id];
+        if (typeof v === "number" && v > 0) {
+          sums[job.id] += convert(v, "RUB", currency);
+          counts[job.id] += 1;
+        }
+      }
+    }
+    return {
+      ozon: counts.ozon > 0 ? sums.ozon / counts.ozon : 0,
+      dostaevsky: counts.dostaevsky > 0 ? sums.dostaevsky / counts.dostaevsky : 0,
+    } as Record<JobId, number>;
+  }, [monthDays, entries, currency, convert]);
+
+  // Forecast: average per worked day (any job) × remaining scheduled days,
+  // added to current monthTotal. Falls back to averagePerDay × remaining days
+  // when no schedule is set.
+  const forecast = useMemo(() => {
+    const todayKey = format(today, "yyyy-MM-dd");
+    const remainingDays = monthDays.filter((d) => {
+      const k = format(d, "yyyy-MM-dd");
+      // strictly after today AND not yet entered
+      return k > todayKey && getDayRub(d) === 0;
+    });
+    if (remainingDays.length === 0) return monthTotal;
+    if (averagePerDay <= 0) return monthTotal;
+
+    const anyAnchored = JOBS.some((j) => scheduleAnchors[j.id]);
+    if (!anyAnchored) {
+      // No schedule — assume every remaining day will earn the average.
+      return monthTotal + averagePerDay * remainingDays.length;
+    }
+
+    let scheduledDaysAhead = 0;
+    for (const d of remainingDays) {
+      if (getScheduledJobsFor(d).length > 0) scheduledDaysAhead += 1;
+    }
+    return monthTotal + averagePerDay * scheduledDaysAhead;
+  }, [
+    monthDays,
+    monthTotal,
+    averagePerDay,
+    scheduleAnchors,
+    getScheduledJobsFor,
+    entries,
+  ]);
+
+  // Comparison with previous month
+  const previousMonthTotal = useMemo(() => {
+    const prev = subMonths(currentDate, 1);
+    const prevDays = eachDayOfInterval({
+      start: startOfMonth(prev),
+      end: endOfMonth(prev),
+    });
+    let sum = 0;
+    for (const d of prevDays) {
+      const entry = getDayEntry(d);
+      if (!entry) continue;
+      sum += convert(dayTotal(entry), "RUB", currency);
+    }
+    return sum;
+  }, [currentDate, entries, currency, convert]);
+
+  const comparisonPct = useMemo(() => {
+    if (previousMonthTotal <= 0) return null;
+    return ((monthTotal - previousMonthTotal) / previousMonthTotal) * 100;
+  }, [monthTotal, previousMonthTotal]);
+
+  // Goal in display currency
+  const goalDisplay = goalRub != null ? convert(goalRub, "RUB", currency) : 0;
+  const goalPct =
+    goalRub != null && goalDisplay > 0
+      ? Math.min(200, (monthTotal / goalDisplay) * 100)
+      : 0;
+
+  // Obligations totals + free amount
+  const obligationsTotal = useMemo(
+    () =>
+      obligations.reduce(
+        (s, o) => s + convert(o.amountRub, "RUB", currency),
+        0,
+      ),
+    [obligations, currency, convert],
+  );
+  const freeAmount = monthTotal - obligationsTotal;
+
+  // Work / off day counts for header
+  const { workCount, offCount } = useMemo(() => {
+    let work = 0;
+    let off = 0;
+    const anyAnchored = JOBS.some((j) => scheduleAnchors[j.id]);
+    if (!anyAnchored) {
+      // Fall back to "worked = days with entries", "off = days without"
+      for (const d of monthDays) {
+        if (getDayRub(d) > 0) work += 1;
+        else off += 1;
+      }
+      return { workCount: work, offCount: off };
+    }
+    for (const d of monthDays) {
+      const scheduled = getScheduledJobsFor(d).length > 0;
+      const worked = getDayRub(d) > 0;
+      if (scheduled || worked) work += 1;
+      else off += 1;
+    }
+    return { workCount: work, offCount: off };
+  }, [monthDays, scheduleAnchors, getScheduledJobsFor, entries]);
+
   const handleSave = (date: Date) => {
     const amounts: Partial<Record<JobId, number>> = {};
     for (const job of JOBS) {
@@ -671,15 +1069,117 @@ export default function Calendar() {
     setOpenKey(null);
   };
 
+  const handleCopyFromYesterday = (date: Date) => {
+    const yesterday = subDays(date, 1);
+    const entry = getDayEntry(yesterday);
+    if (!entry) return;
+    const next: Record<JobId, string> = { ozon: "", dostaevsky: "" };
+    for (const job of JOBS) {
+      const v = entry[job.id];
+      if (typeof v === "number" && v > 0) {
+        next[job.id] = String(Math.round(convert(v, "RUB", currency)));
+      }
+    }
+    setEditValues(next);
+  };
+
   const monthName = format(currentDate, "LLLL", { locale: ru }).toLowerCase();
   const yearStr = format(currentDate, "yyyy");
-  const today = new Date();
 
   const handlePickMonth = (monthIndex: number) => {
-    const next = setMonth(setYear(currentDate, pickerYear), monthIndex);
+    let next = setYear(currentDate, pickerYear);
+    next = setMonth(next, monthIndex);
+    next = startOfMonth(next);
     setCurrentDate(next);
     setMonthPickerOpen(false);
   };
+
+  // CSV + summary builders for the data menu
+  const buildCsv = useCallback(() => {
+    const lines: string[] = [];
+    lines.push("дата,озон,достаевский,итого,валюта");
+    for (const d of monthDays) {
+      const key = format(d, "yyyy-MM-dd");
+      const entry = entries[key];
+      const ozon = entry?.ozon
+        ? Math.round(convert(entry.ozon, "RUB", currency))
+        : 0;
+      const dost = entry?.dostaevsky
+        ? Math.round(convert(entry.dostaevsky, "RUB", currency))
+        : 0;
+      const total = ozon + dost;
+      lines.push(`${key},${ozon},${dost},${total},${currency}`);
+    }
+    lines.push("");
+    lines.push(
+      `# итого ${monthName} ${yearStr}: ${Math.round(monthTotal)} ${currency}`,
+    );
+    return lines.join("\n");
+  }, [monthDays, entries, currency, convert, monthName, yearStr, monthTotal]);
+
+  const buildSummary = useCallback(() => {
+    const parts: string[] = [];
+    parts.push(
+      `${monthName} ${yearStr}: ${formatMoney(monthTotal, currency)}`,
+    );
+    const jobBits = JOBS.filter((j) => perJobMonthTotal[j.id] > 0).map(
+      (j) =>
+        `${j.label.toLowerCase()} ${formatMoney(perJobMonthTotal[j.id], currency)}`,
+    );
+    if (jobBits.length) parts.push(jobBits.join(", "));
+    parts.push(
+      `среднее ${formatMoney(averagePerDay, currency)}/день · ${daysWithEntries} раб. дней`,
+    );
+    if (obligationsTotal > 0) {
+      parts.push(
+        `обязательства ${formatMoney(obligationsTotal, currency)} → свободно ${formatMoney(freeAmount, currency)}`,
+      );
+    }
+    if (goalRub != null && goalDisplay > 0) {
+      parts.push(`цель ${formatMoney(goalDisplay, currency)} (${Math.round(goalPct)}%)`);
+    }
+    return parts.join(" • ");
+  }, [
+    monthName,
+    yearStr,
+    monthTotal,
+    currency,
+    perJobMonthTotal,
+    averagePerDay,
+    daysWithEntries,
+    obligationsTotal,
+    freeAmount,
+    goalRub,
+    goalDisplay,
+    goalPct,
+  ]);
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      // Ignore if a popover is open or focus is in an input/textarea
+      if (openKey || monthPickerOpen) return;
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable) {
+        return;
+      }
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        setCurrentDate((d) => subMonths(d, 1));
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        setCurrentDate((d) => addMonths(d, 1));
+      } else if (e.key === "t" || e.key === "T" || e.key === "е" || e.key === "Е") {
+        e.preventDefault();
+        setCurrentDate(new Date());
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [openKey, monthPickerOpen]);
 
   return (
     <div className="h-[100dvh] w-full bg-background text-foreground overflow-hidden p-3 sm:p-4">
@@ -770,18 +1270,32 @@ export default function Calendar() {
                 </button>
               </PopoverContent>
             </Popover>
+
+            {/* Work / off day counter */}
+            <span
+              className="hidden sm:inline-flex items-baseline gap-1.5 text-[10px] uppercase tracking-[0.2em] text-muted-foreground tabular-nums"
+              title="Рабочие / выходные дни в месяце"
+            >
+              <span className="text-foreground/80">{workCount.toString().padStart(2, "0")}</span>
+              <span>раб</span>
+              <span className="opacity-50">/</span>
+              <span className="text-foreground/80">{offCount.toString().padStart(2, "0")}</span>
+              <span>вых</span>
+            </span>
           </div>
 
           <div className="flex items-center gap-1.5">
             <button
               onClick={() => setCurrentDate(subMonths(currentDate, 1))}
               aria-label="Предыдущий месяц"
+              title="← предыдущий месяц"
               className="h-7 w-7 flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted rounded-md transition-colors text-sm"
             >
               ‹
             </button>
             <button
-              onClick={() => setMonthPickerOpen(true)}
+              onClick={() => setCurrentDate(new Date())}
+              title="T — сегодня"
               className="h-7 px-3 text-[11px] font-medium uppercase tracking-[0.2em] text-foreground hover:bg-muted rounded-md transition-colors"
             >
               сегодня
@@ -789,6 +1303,7 @@ export default function Calendar() {
             <button
               onClick={() => setCurrentDate(addMonths(currentDate, 1))}
               aria-label="Следующий месяц"
+              title="→ следующий месяц"
               className="h-7 w-7 flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted rounded-md transition-colors text-sm"
             >
               ›
@@ -811,6 +1326,14 @@ export default function Calendar() {
                 </button>
               ))}
             </div>
+            <div className="w-px h-5 bg-border mx-1.5" />
+            <ThemeToggle theme={theme} onToggle={toggleTheme} />
+            <DataMenu
+              exportData={exportData}
+              importData={importData}
+              buildCsv={buildCsv}
+              buildSummary={buildSummary}
+            />
           </div>
         </header>
 
@@ -832,217 +1355,273 @@ export default function Calendar() {
             ))}
           </div>
 
-          <div
-            className="flex-1 grid min-h-0"
-            style={{
-              gridTemplateRows: `repeat(${weeks.length}, minmax(0, 1fr))`,
-            }}
-          >
-            {weeks.map((week, wi) => {
-              const isLastWeek = wi === weeks.length - 1;
-              return (
-                <div
-                  key={wi}
-                  className={cn(
-                    "grid grid-cols-7 min-h-0",
-                    !isLastWeek && "border-b border-border",
-                  )}
-                >
-                  {week.map((day, di) => {
-                    const isCurrentMonth = isSameMonth(day, currentDate);
-                    const isToday = isSameDay(day, today);
-                    const amtRub = getDayRub(day);
-                    const amtDisplay = getDayInDisplay(day);
-                    const hasEntry = amtRub > 0;
-                    const jobsWorked = getJobsWorked(day);
-                    const jobsScheduled = getScheduledJobs(day);
-                    const visibleJobs = JOBS.filter(
-                      (j) =>
-                        jobsWorked.includes(j.id) ||
-                        jobsScheduled.includes(j.id),
-                    );
-                    const key = format(day, "yyyy-MM-dd");
-                    const isOpen = openKey === key;
-                    const weekend = isWeekend(day);
-                    const isLastCol = di === 6;
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.div
+              key={`${currentDate.getFullYear()}-${currentDate.getMonth()}`}
+              initial={{ opacity: 0, x: 8 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -8 }}
+              transition={{ duration: 0.16, ease: "easeOut" }}
+              className="flex-1 grid min-h-0"
+              style={{
+                gridTemplateRows: `repeat(${weeks.length}, minmax(0, 1fr))`,
+              }}
+            >
+              {weeks.map((week, wi) => {
+                const isLastWeek = wi === weeks.length - 1;
+                return (
+                  <div
+                    key={wi}
+                    className={cn(
+                      "grid grid-cols-7 min-h-0",
+                      !isLastWeek && "border-b border-border",
+                    )}
+                  >
+                    {week.map((day, di) => {
+                      const isCurrentMonth = isSameMonth(day, currentDate);
+                      const isToday = isSameDay(day, today);
+                      const amtRub = getDayRub(day);
+                      const amtDisplay = getDayInDisplay(day);
+                      const hasEntry = amtRub > 0;
+                      const jobsWorked = getJobsWorked(day);
+                      const jobsScheduled = getScheduledJobsFor(day);
+                      const visibleJobs = JOBS.filter(
+                        (j) =>
+                          jobsWorked.includes(j.id) ||
+                          jobsScheduled.includes(j.id),
+                      );
+                      const key = format(day, "yyyy-MM-dd");
+                      const isOpen = openKey === key;
+                      const weekend = isWeekend(day);
+                      const isLastCol = di === 6;
+                      const yesterday = subDays(day, 1);
+                      const yesterdayEntry = getDayEntry(yesterday);
+                      const hasYesterday =
+                        !!yesterdayEntry && dayTotal(yesterdayEntry) > 0;
 
-                    return (
-                      <Popover
-                        key={key}
-                        open={isOpen}
-                        onOpenChange={(open) => {
-                          if (open) {
-                            setOpenKey(key);
-                            const entry = getDayEntry(day);
-                            const next: Record<JobId, string> = {
-                              ozon: "",
-                              dostaevsky: "",
-                            };
-                            if (entry && isCurrentMonth) {
-                              for (const job of JOBS) {
-                                const v = entry[job.id];
-                                if (typeof v === "number" && v > 0) {
-                                  const inDisplay = Math.round(
-                                    convert(v, "RUB", currency),
-                                  );
-                                  next[job.id] = String(inDisplay);
+                      return (
+                        <Popover
+                          key={key}
+                          open={isOpen}
+                          onOpenChange={(open) => {
+                            if (open) {
+                              setOpenKey(key);
+                              const entry = getDayEntry(day);
+                              const next: Record<JobId, string> = {
+                                ozon: "",
+                                dostaevsky: "",
+                              };
+                              if (entry && isCurrentMonth) {
+                                for (const job of JOBS) {
+                                  const v = entry[job.id];
+                                  if (typeof v === "number" && v > 0) {
+                                    const inDisplay = Math.round(
+                                      convert(v, "RUB", currency),
+                                    );
+                                    next[job.id] = String(inDisplay);
+                                  }
                                 }
                               }
+                              setEditValues(next);
+                            } else if (isOpen) {
+                              setOpenKey(null);
                             }
-                            setEditValues(next);
-                          } else if (isOpen) {
-                            setOpenKey(null);
-                          }
-                        }}
-                      >
-                        <PopoverTrigger asChild>
-                          <button
-                            className={cn(
-                              "flex flex-col items-stretch justify-between text-left transition-colors outline-none relative min-h-0 px-2 py-1.5 group",
-                              !isLastCol && "border-r border-border",
-                              !isCurrentMonth && "bg-background/40",
-                              isCurrentMonth && weekend && !hasEntry && "bg-muted/15",
-                              isCurrentMonth && hasEntry && "bg-foreground/[0.025]",
-                              isCurrentMonth && "hover:bg-muted/40",
-                              "focus-visible:ring-1 focus-visible:ring-primary focus-visible:ring-inset",
-                            )}
-                          >
-                            <div className="flex items-center justify-between gap-1">
-                              <span
-                                className={cn(
-                                  "text-[11px] font-medium tabular-nums tracking-tight",
-                                  !isCurrentMonth && "text-muted-foreground/30",
-                                  isCurrentMonth && !isToday && !hasEntry && "text-muted-foreground",
-                                  isCurrentMonth && hasEntry && !isToday && "text-foreground",
-                                  isToday &&
-                                    "text-primary-foreground bg-primary px-1.5 py-0.5 rounded-sm self-start",
-                                )}
-                              >
-                                {format(day, "dd")}
-                              </span>
+                          }}
+                        >
+                          <PopoverTrigger asChild>
+                            <button
+                              onContextMenu={(e) => {
+                                // Right-click: toggle schedule for the first
+                                // scheduled job, or for ozon by default if
+                                // none is scheduled but at least one is anchored.
+                                if (!isCurrentMonth) return;
+                                const targets = jobsScheduled.length
+                                  ? jobsScheduled
+                                  : JOBS.filter((j) => scheduleAnchors[j.id]).map(
+                                      (j) => j.id,
+                                    );
+                                if (targets.length === 0) return;
+                                e.preventDefault();
+                                toggleScheduleDay(targets[0], day);
+                              }}
+                              className={cn(
+                                "flex flex-col items-stretch justify-between text-left transition-colors outline-none relative min-h-0 px-2 py-1.5 group",
+                                !isLastCol && "border-r border-border",
+                                !isCurrentMonth && "bg-background/40",
+                                isCurrentMonth && weekend && !hasEntry && "bg-muted/15",
+                                isCurrentMonth && hasEntry && "bg-foreground/[0.025]",
+                                isCurrentMonth && "hover:bg-muted/40",
+                                "focus-visible:ring-1 focus-visible:ring-primary focus-visible:ring-inset",
+                              )}
+                            >
+                              <div className="flex items-center justify-between gap-1">
+                                <span
+                                  className={cn(
+                                    "text-[11px] font-medium tabular-nums tracking-tight",
+                                    !isCurrentMonth && "text-muted-foreground/30",
+                                    isCurrentMonth && !isToday && !hasEntry && "text-muted-foreground",
+                                    isCurrentMonth && hasEntry && !isToday && "text-foreground",
+                                    isToday &&
+                                      "text-primary-foreground bg-primary px-1.5 py-0.5 rounded-sm self-start",
+                                  )}
+                                >
+                                  {format(day, "dd")}
+                                </span>
 
-                              {/* Job tag markers (worked = full, scheduled-only = faded) */}
-                              {visibleJobs.length > 0 && isCurrentMonth && (
-                                <div className="flex items-center gap-0.5">
-                                  {visibleJobs.map((job) => {
-                                    const isWorked = jobsWorked.includes(job.id);
-                                    return (
-                                      <span
-                                        key={job.id}
-                                        title={`${job.label}${isWorked ? "" : " (план)"}`}
+                                {/* Job tag markers (worked = full, scheduled-only = faded) */}
+                                {visibleJobs.length > 0 && isCurrentMonth && (
+                                  <div className="flex items-center gap-0.5">
+                                    {visibleJobs.map((job) => {
+                                      const isWorked = jobsWorked.includes(job.id);
+                                      return (
+                                        <span
+                                          key={job.id}
+                                          title={`${job.label}${isWorked ? "" : " (план)"}`}
+                                          className={cn(
+                                            "w-3.5 h-3.5 inline-flex items-center justify-center rounded-sm text-[8px] font-bold uppercase tracking-tight leading-none transition-opacity",
+                                            job.id === "ozon"
+                                              ? "bg-foreground/80 text-background"
+                                              : "border border-foreground/60 text-foreground/80",
+                                            !isWorked && "opacity-35",
+                                          )}
+                                        >
+                                          {job.short}
+                                        </span>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                              </div>
+
+                              {hasEntry && isCurrentMonth && (
+                                <motion.span
+                                  key={`${amtRub}-${currency}`}
+                                  initial={{ opacity: 0, y: 2 }}
+                                  animate={{ opacity: 1, y: 0 }}
+                                  transition={{ duration: 0.18 }}
+                                  className="text-[12px] font-semibold tabular-nums text-foreground text-right truncate leading-none mt-1"
+                                >
+                                  {formatMoney(amtDisplay, currency)}
+                                </motion.span>
+                              )}
+                            </button>
+                          </PopoverTrigger>
+                          <PopoverContent
+                            className="w-[280px] p-3"
+                            align="center"
+                            sideOffset={4}
+                          >
+                            <div className="space-y-3">
+                              <div className="flex items-center justify-between">
+                                <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+                                  {format(day, "d MMMM yyyy", { locale: ru })}
+                                </span>
+                                <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+                                  {currency}
+                                </span>
+                              </div>
+
+                              <form
+                                onSubmit={(e) => {
+                                  e.preventDefault();
+                                  handleSave(day);
+                                }}
+                                className="space-y-2"
+                              >
+                                {JOBS.map((job, idx) => {
+                                  const isOnSchedule = jobsScheduled.includes(
+                                    job.id,
+                                  );
+                                  const placeholder =
+                                    perJobDailyAverage[job.id] > 0
+                                      ? String(
+                                          Math.round(perJobDailyAverage[job.id]),
+                                        )
+                                      : "0";
+                                  return (
+                                    <div
+                                      key={job.id}
+                                      className="flex items-center gap-2"
+                                    >
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          toggleScheduleDay(job.id, day)
+                                        }
+                                        title={
+                                          isOnSchedule
+                                            ? "Убрать из графика"
+                                            : "В график"
+                                        }
                                         className={cn(
-                                          "w-3.5 h-3.5 inline-flex items-center justify-center rounded-sm text-[8px] font-bold uppercase tracking-tight leading-none transition-opacity",
+                                          "shrink-0 w-5 h-5 inline-flex items-center justify-center rounded-sm text-[10px] font-bold uppercase transition-opacity",
                                           job.id === "ozon"
                                             ? "bg-foreground/80 text-background"
                                             : "border border-foreground/60 text-foreground/80",
-                                          !isWorked && "opacity-35",
+                                          !isOnSchedule && "opacity-35",
                                         )}
                                       >
                                         {job.short}
+                                      </button>
+                                      <span className="text-[11px] tracking-[0.05em] text-muted-foreground w-[88px] truncate">
+                                        {job.label}
                                       </span>
-                                    );
-                                  })}
-                                </div>
-                              )}
-                            </div>
+                                      <NumericInput
+                                        autoFocus={idx === 0}
+                                        placeholder={placeholder}
+                                        value={editValues[job.id]}
+                                        onChange={(v) =>
+                                          setEditValues((prev) => ({
+                                            ...prev,
+                                            [job.id]: v,
+                                          }))
+                                        }
+                                        onSubmit={() => handleSave(day)}
+                                      />
+                                    </div>
+                                  );
+                                })}
 
-                            {hasEntry && isCurrentMonth && (
-                              <motion.span
-                                key={`${amtRub}-${currency}`}
-                                initial={{ opacity: 0, y: 2 }}
-                                animate={{ opacity: 1, y: 0 }}
-                                transition={{ duration: 0.18 }}
-                                className="text-[12px] font-semibold tabular-nums text-foreground text-right truncate leading-none mt-1"
-                              >
-                                {formatMoney(amtDisplay, currency)}
-                              </motion.span>
-                            )}
-                          </button>
-                        </PopoverTrigger>
-                        <PopoverContent
-                          className="w-[260px] p-3"
-                          align="center"
-                          sideOffset={4}
-                        >
-                          <div className="space-y-3">
-                            <div className="flex items-center justify-between">
-                              <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
-                                {format(day, "d MMMM yyyy", { locale: ru })}
-                              </span>
-                              <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
-                                {currency}
-                              </span>
-                            </div>
-
-                            <form
-                              onSubmit={(e) => {
-                                e.preventDefault();
-                                handleSave(day);
-                              }}
-                              className="space-y-2"
-                            >
-                              {JOBS.map((job, idx) => (
-                                <div
-                                  key={job.id}
-                                  className="flex items-center gap-2"
-                                >
-                                  <span
-                                    className={cn(
-                                      "shrink-0 w-5 h-5 inline-flex items-center justify-center rounded-sm text-[10px] font-bold uppercase",
-                                      job.id === "ozon"
-                                        ? "bg-foreground/80 text-background"
-                                        : "border border-foreground/60 text-foreground/80",
-                                    )}
-                                  >
-                                    {job.short}
-                                  </span>
-                                  <span className="text-[11px] tracking-[0.05em] text-muted-foreground w-[88px] truncate">
-                                    {job.label}
-                                  </span>
-                                  <NumericInput
-                                    autoFocus={idx === 0}
-                                    placeholder="0"
-                                    value={editValues[job.id]}
-                                    onChange={(v) =>
-                                      setEditValues((prev) => ({
-                                        ...prev,
-                                        [job.id]: v,
-                                      }))
-                                    }
-                                    onSubmit={() => handleSave(day)}
-                                  />
-                                </div>
-                              ))}
-
-                              <div className="flex items-center justify-between gap-2 pt-1">
-                                {hasEntry ? (
+                                {hasYesterday && (
                                   <button
                                     type="button"
-                                    onClick={() => handleClear(day)}
-                                    className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground hover:text-destructive transition-colors"
+                                    onClick={() => handleCopyFromYesterday(day)}
+                                    className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground hover:text-foreground transition-colors"
                                   >
-                                    удалить
+                                    ↑ как вчера
                                   </button>
-                                ) : (
-                                  <span />
                                 )}
-                                <button
-                                  type="submit"
-                                  className="h-8 px-4 text-xs font-medium uppercase tracking-[0.15em] bg-primary text-primary-foreground rounded-md hover:opacity-90"
-                                >
-                                  сохранить
-                                </button>
-                              </div>
-                            </form>
-                          </div>
-                        </PopoverContent>
-                      </Popover>
-                    );
-                  })}
-                </div>
-              );
-            })}
-          </div>
+
+                                <div className="flex items-center justify-between gap-2 pt-1">
+                                  {hasEntry ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleClear(day)}
+                                      className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground hover:text-destructive transition-colors"
+                                    >
+                                      удалить
+                                    </button>
+                                  ) : (
+                                    <span />
+                                  )}
+                                  <button
+                                    type="submit"
+                                    className="h-8 px-4 text-xs font-medium uppercase tracking-[0.15em] bg-primary text-primary-foreground rounded-md hover:opacity-90"
+                                  >
+                                    сохранить
+                                  </button>
+                                </div>
+                              </form>
+                            </div>
+                          </PopoverContent>
+                        </Popover>
+                      );
+                    })}
+                  </div>
+                );
+              })}
+            </motion.div>
+          </AnimatePresence>
         </Tile>
 
         {/* Right column: total + per-job + weeks */}
@@ -1053,13 +1632,80 @@ export default function Calendar() {
           {/* Total tile (merged with stats) */}
           <Tile>
             <div className="px-4 pt-4 pb-3">
-              <TileLabel>итого</TileLabel>
+              <div className="flex items-center justify-between">
+                <TileLabel>итого</TileLabel>
+                {comparisonPct != null && (
+                  <span
+                    className={cn(
+                      "text-[10px] tabular-nums font-medium tracking-tight",
+                      comparisonPct >= 0
+                        ? "text-foreground/70"
+                        : "text-destructive/80",
+                    )}
+                    title={`Прошлый месяц: ${formatMoney(previousMonthTotal, currency)}`}
+                  >
+                    {comparisonPct >= 0 ? "+" : ""}
+                    {comparisonPct.toFixed(0)}%
+                  </span>
+                )}
+              </div>
               <div className="mt-2 text-[28px] font-semibold tracking-tight tabular-nums leading-none">
                 <MoneyTicker value={monthTotal} currency={currency} />
               </div>
               <div className="mt-2 text-[11px] text-muted-foreground tabular-nums">
                 [{daysWithEntries.toString().padStart(2, "0")}/
                 {monthDays.length.toString().padStart(2, "0")}] дней
+              </div>
+
+              {/* Forecast */}
+              {forecast > monthTotal && (
+                <div className="mt-2 flex items-baseline justify-between gap-2 text-[11px]">
+                  <span className="uppercase tracking-[0.2em] text-muted-foreground/70 text-[9px]">
+                    прогноз
+                  </span>
+                  <span className="text-muted-foreground tabular-nums">
+                    {formatMoney(forecast, currency)}
+                  </span>
+                </div>
+              )}
+
+              {/* Goal */}
+              <div className="mt-3 space-y-1.5">
+                <div className="flex items-baseline justify-between gap-2">
+                  <GoalEditor
+                    goalRub={goalRub}
+                    currency={currency}
+                    convert={convert}
+                    onSet={setGoal}
+                    onClear={clearGoal}
+                  />
+                  {goalRub != null && goalDisplay > 0 && (
+                    <span className="text-[10px] tabular-nums text-muted-foreground">
+                      {formatMoney(goalDisplay, currency)} ·{" "}
+                      <span
+                        className={cn(
+                          "font-medium",
+                          goalPct >= 100 ? "text-foreground" : "text-muted-foreground",
+                        )}
+                      >
+                        {Math.round(goalPct)}%
+                      </span>
+                    </span>
+                  )}
+                </div>
+                {goalRub != null && goalDisplay > 0 && (
+                  <div className="h-[3px] w-full rounded-full bg-muted overflow-hidden">
+                    <motion.div
+                      initial={false}
+                      animate={{ width: `${Math.min(100, goalPct)}%` }}
+                      transition={{ duration: 0.32, ease: "easeOut" }}
+                      className={cn(
+                        "h-full rounded-full",
+                        goalPct >= 100 ? "bg-foreground" : "bg-foreground/60",
+                      )}
+                    />
+                  </div>
+                )}
               </div>
             </div>
             <div className="border-t border-border divide-y divide-border">
@@ -1088,8 +1734,8 @@ export default function Calendar() {
               <TileLabel>по работам</TileLabel>
               <SchedulePicker
                 currentDate={currentDate}
-                onApply={applySchedule}
-                onClear={clearScheduleForMonth}
+                onApply={applyScheduleAnchor}
+                onClear={clearScheduleForJob}
               />
             </div>
             <ul className="divide-y divide-border">
@@ -1167,6 +1813,7 @@ export default function Calendar() {
           obligations={obligations}
           currency={currency}
           convert={convert}
+          freeAmount={freeAmount}
           onAdd={addObligation}
           onUpdate={updateObligation}
           onRemove={removeObligation}
