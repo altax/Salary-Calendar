@@ -100,6 +100,12 @@ export type RouteIndex = {
   totalLength: number;
   steps: RouteStep[];
   stepEntryDistances: number[];
+  legCount: number;
+  legCumDistances: number[];
+  legVertexStart: number[];
+  legVertexEnd: number[];
+  legDurations: number[];
+  legDistances: number[];
 };
 
 export function buildRouteIndex(route: RouteResult): RouteIndex {
@@ -118,7 +124,84 @@ export function buildRouteIndex(route: RouteResult): RouteIndex {
     stepEntryDistances.push(acc);
     acc += s.distance;
   }
-  return { geometry, segLengths, cumLengths, totalLength, steps, stepEntryDistances };
+
+  const legCount = route.legs.length;
+  const legCumDistances: number[] = [0];
+  const legDistances: number[] = [];
+  const legDurations: number[] = [];
+  for (const leg of route.legs) {
+    legDistances.push(leg.distance);
+    legDurations.push(leg.duration);
+    legCumDistances.push(legCumDistances[legCumDistances.length - 1] + leg.distance);
+  }
+
+  const legVertexStart: number[] = [0];
+  for (let li = 1; li < legCumDistances.length; li += 1) {
+    let i = legVertexStart[li - 1];
+    while (i < cumLengths.length - 1 && cumLengths[i] < legCumDistances[li]) i += 1;
+    legVertexStart.push(i);
+  }
+  const legVertexEnd: number[] = [];
+  for (let li = 0; li < legCount; li += 1) {
+    legVertexEnd.push(legVertexStart[li + 1] ?? geometry.length - 1);
+  }
+
+  return {
+    geometry,
+    segLengths,
+    cumLengths,
+    totalLength,
+    steps,
+    stepEntryDistances,
+    legCount,
+    legCumDistances,
+    legVertexStart,
+    legVertexEnd,
+    legDurations,
+    legDistances,
+  };
+}
+
+export function getLegGeometry(
+  index: RouteIndex,
+  legIndex: number,
+): [number, number][] {
+  if (legIndex < 0 || legIndex >= index.legCount) return [];
+  const start = index.legVertexStart[legIndex];
+  const end = index.legVertexEnd[legIndex];
+  return index.geometry.slice(start, end + 1);
+}
+
+export function currentLegIndex(index: RouteIndex, distFromStartM: number): number {
+  for (let i = index.legCount - 1; i >= 0; i -= 1) {
+    if (distFromStartM + 0.5 >= index.legCumDistances[i]) return i;
+  }
+  return 0;
+}
+
+export function legSliceFromProjection(
+  index: RouteIndex,
+  legIndex: number,
+  segmentIndex: number,
+  projection: LatLng,
+): [number, number][] {
+  if (legIndex < 0 || legIndex >= index.legCount) return [];
+  const legEnd = index.legVertexEnd[legIndex];
+  const legStart = index.legVertexStart[legIndex];
+  if (segmentIndex < legStart) {
+    return getLegGeometry(index, legIndex);
+  }
+  if (segmentIndex >= legEnd) {
+    return [
+      [projection.lat, projection.lng],
+      index.geometry[legEnd],
+    ];
+  }
+  const out: [number, number][] = [[projection.lat, projection.lng]];
+  for (let i = segmentIndex + 1; i <= legEnd; i += 1) {
+    out.push(index.geometry[i]);
+  }
+  return out;
 }
 
 export function computeProgress(

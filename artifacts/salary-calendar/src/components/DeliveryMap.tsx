@@ -136,6 +136,36 @@ function makeDepotIcon(opts: { theme: "dark" | "light"; size?: number }) {
   });
 }
 
+function makeCheckIcon(opts: { theme: "dark" | "light"; size?: number }) {
+  const { theme, size = 22 } = opts;
+  const bg = theme === "dark" ? "#22c55e" : "#16a34a";
+  const fg = "#fff";
+  const html = `
+    <div style="
+      width: ${size}px;
+      height: ${size}px;
+      border-radius: 50%;
+      background: ${bg};
+      color: ${fg};
+      border: 2px solid ${theme === "dark" ? "#0a0a0a" : "#fafafa"};
+      box-shadow: 0 0 0 2px rgba(0,0,0,0.45);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 1;
+    ">✓</div>
+  `;
+  return L.divIcon({
+    className: "check-marker",
+    html,
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2],
+  });
+}
+
 function makeManeuverIcon(opts: { arrow: string; theme: "dark" | "light"; size?: number }) {
   const { arrow, theme, size = 22 } = opts;
   const bg = theme === "dark" ? "#fafafa" : "#0a0a0a";
@@ -247,6 +277,14 @@ export type ManeuverMarker = {
   label?: string;
 };
 
+export type RouteLegSegment = {
+  geometry: [number, number][];
+  status: "done" | "active" | "upcoming";
+  endLabel?: string;
+  endLatLng?: { lat: number; lng: number };
+  kind?: "delivery" | "return";
+};
+
 export type DeliveryMapProps = {
   deliveries: Delivery[];
   pending: PendingOrder[];
@@ -274,6 +312,8 @@ export type DeliveryMapProps = {
   activeRouteGeometry?: [number, number][] | null;
   traveledGeometry?: [number, number][] | null;
   maneuvers?: ManeuverMarker[] | null;
+  routeLegs?: RouteLegSegment[] | null;
+  showRouteOverlay?: boolean;
 };
 
 export default function DeliveryMap({
@@ -303,6 +343,8 @@ export default function DeliveryMap({
   activeRouteGeometry,
   traveledGeometry,
   maneuvers,
+  routeLegs,
+  showRouteOverlay = true,
 }: DeliveryMapProps) {
   const sortedDeliveries = useMemo(
     () =>
@@ -395,7 +437,7 @@ export default function DeliveryMap({
         {fitToAll && <FitBounds points={fitPoints} />}
         {followUser && <FollowUser position={userPosition ?? null} />}
 
-        {pendingRoutePositions && pendingRoutePositions.length >= 2 && (
+        {showRouteOverlay && !routeLegs && pendingRoutePositions && pendingRoutePositions.length >= 2 && (
           <Polyline
             positions={pendingRoutePositions}
             pathOptions={{
@@ -408,7 +450,7 @@ export default function DeliveryMap({
           />
         )}
 
-        {activeRoutePositions && (
+        {showRouteOverlay && !routeLegs && activeRoutePositions && (
           <Polyline
             positions={activeRoutePositions}
             pathOptions={{
@@ -422,7 +464,7 @@ export default function DeliveryMap({
           />
         )}
 
-        {traveledGeometry && traveledGeometry.length >= 2 && (
+        {showRouteOverlay && !routeLegs && traveledGeometry && traveledGeometry.length >= 2 && (
           <Polyline
             positions={traveledGeometry}
             pathOptions={{
@@ -435,7 +477,70 @@ export default function DeliveryMap({
           />
         )}
 
-        {maneuvers?.map((m, i) => (
+        {showRouteOverlay && routeLegs?.map((leg, i) => {
+          if (leg.geometry.length < 2) return null;
+          const isReturn = leg.kind === "return";
+          if (leg.status === "done") {
+            return (
+              <Polyline
+                key={`leg-done-${i}`}
+                positions={leg.geometry}
+                pathOptions={{
+                  color: theme === "dark" ? "#3a5a3a" : "#7fbf7f",
+                  weight: 4,
+                  opacity: 0.45,
+                  dashArray: "2 7",
+                  lineCap: "round",
+                  lineJoin: "round",
+                }}
+              />
+            );
+          }
+          if (leg.status === "active") {
+            return (
+              <Polyline
+                key={`leg-active-${i}`}
+                positions={leg.geometry}
+                pathOptions={{
+                  color: isReturn ? "#a855f7" : "#3b82f6",
+                  weight: 7,
+                  opacity: 0.95,
+                  lineCap: "round",
+                  lineJoin: "round",
+                }}
+              />
+            );
+          }
+          return (
+            <Polyline
+              key={`leg-up-${i}`}
+              positions={leg.geometry}
+              pathOptions={{
+                color: theme === "dark" ? "#888" : "#5a5a5a",
+                weight: 4,
+                opacity: 0.55,
+                dashArray: "9 6",
+                lineCap: "round",
+                lineJoin: "round",
+              }}
+            />
+          );
+        })}
+
+        {showRouteOverlay && routeLegs?.map((leg, i) =>
+          leg.status === "done" && leg.endLatLng ? (
+            <Marker
+              key={`leg-check-${i}`}
+              position={[leg.endLatLng.lat, leg.endLatLng.lng]}
+              icon={makeCheckIcon({ theme })}
+              interactive={false}
+              keyboard={false}
+              zIndexOffset={400}
+            />
+          ) : null,
+        )}
+
+        {showRouteOverlay && maneuvers?.map((m, i) => (
           <Marker
             key={`mv-${i}`}
             position={[m.lat, m.lng]}

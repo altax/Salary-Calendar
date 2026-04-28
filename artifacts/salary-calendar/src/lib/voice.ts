@@ -240,3 +240,75 @@ export class StepAnnouncer {
     voice.speak("Маршрут перестроен.");
   }
 }
+
+export class StopAnnouncer {
+  private announcedFar = new Set<string>();
+  private announcedNear = new Set<string>();
+
+  reset(): void {
+    this.announcedFar.clear();
+    this.announcedNear.clear();
+  }
+
+  considerAnnounce(
+    voice: VoiceController,
+    stopId: string,
+    label: string,
+    distanceM: number,
+  ): void {
+    if (distanceM <= 80 && !this.announcedNear.has(stopId)) {
+      this.announcedNear.add(stopId);
+      this.announcedFar.add(stopId);
+      voice.speak(`${label} — рядом, готовьтесь к остановке.`);
+      return;
+    }
+    if (distanceM <= 400 && !this.announcedFar.has(stopId)) {
+      this.announcedFar.add(stopId);
+      voice.speak(`${label} — через ${Math.round(distanceM / 10) * 10} метров.`);
+    }
+  }
+}
+
+export function announceRouteBuilt(
+  voice: VoiceController,
+  totalKm: number,
+  totalSec: number,
+  stopsCount: number,
+): void {
+  const km = totalKm < 1 ? `${Math.round(totalKm * 1000)} метров` : `${totalKm.toFixed(1).replace(".", ",")} километров`;
+  const min = Math.max(1, Math.round(totalSec / 60));
+  const stopsWord =
+    stopsCount % 10 === 1 && stopsCount % 100 !== 11
+      ? "точка"
+      : stopsCount % 10 >= 2 && stopsCount % 10 <= 4 && (stopsCount % 100 < 12 || stopsCount % 100 > 14)
+        ? "точки"
+        : "точек";
+  voice.speak(
+    `Маршрут построен. ${stopsCount} ${stopsWord}, ${km}, около ${min} минут.`,
+  );
+}
+
+export function announceStopDelivered(
+  voice: VoiceController,
+  remaining: number,
+): void {
+  if (remaining <= 0) {
+    voice.speak("Заказ доставлен. Все точки выполнены, строю маршрут до депо.");
+  } else {
+    const word =
+      remaining % 10 === 1 && remaining % 100 !== 11
+        ? "точка"
+        : remaining % 10 >= 2 && remaining % 10 <= 4 && (remaining % 100 < 12 || remaining % 100 > 14)
+          ? "точки"
+          : "точек";
+    voice.speak(`Заказ доставлен. Осталось ${remaining} ${word}.`);
+  }
+}
+
+export function announceReturningToDepot(voice: VoiceController): void {
+  voice.speak("Все заказы доставлены. Маршрут до депо построен.");
+}
+
+export function announceShiftFinished(voice: VoiceController): void {
+  voice.speak("Вы прибыли в депо. Смена окончена. Хорошего отдыха.");
+}
