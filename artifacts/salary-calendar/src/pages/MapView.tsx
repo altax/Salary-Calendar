@@ -178,6 +178,23 @@ export default function MapView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingRoute.route]);
 
+  // Auto-finish the active wave once every stop is resolved. Without this the
+  // wave gets stuck in an "all delivered but not finalised" limbo: it does not
+  // appear in the "готово" tab and its markers + route stay glued to the map.
+  // We skip the check while DriveMode is open because it relies on the active
+  // wave to drive the return-to-depot leg; the same auto-finish then fires the
+  // moment the user closes DriveMode.
+  useEffect(() => {
+    if (driving) return;
+    const aw = wavesStore.activeWave;
+    if (!aw) return;
+    const pendingCount = aw.stops.filter((s) => s.status === "pending").length;
+    const doneCount = aw.stops.filter((s) => s.status === "delivered").length;
+    if (pendingCount === 0 && doneCount > 0) {
+      wavesStore.finishActiveWave();
+    }
+  }, [driving, wavesStore.activeWave, wavesStore]);
+
   const visibleDeliveries = useMemo(
     () =>
       deliveriesStore.deliveries
