@@ -10,6 +10,7 @@ import {
   useMap,
   useMapEvents,
 } from "react-leaflet";
+import { cn } from "@/lib/utils";
 import type { Delivery, PendingOrder } from "@/lib/deliveries";
 import type { ResolvedJob, Depot } from "@/lib/store";
 import type { GeoPosition } from "@/lib/geolocation";
@@ -233,6 +234,38 @@ function makeUserIcon(opts: { heading: number | null; size?: number }) {
   });
 }
 
+function MapReadyReporter({ onMapReady }: { onMapReady?: (map: L.Map) => void }) {
+  const map = useMap();
+  useEffect(() => {
+    if (onMapReady) onMapReady(map);
+  }, [map, onMapReady]);
+  return null;
+}
+
+function AutoZoomBack({ userPosition }: { userPosition: { lat: number; lng: number } }) {
+  const map = useMap();
+  const timerRef = useRef<number | null>(null);
+
+  useMapEvents({
+    zoomstart() {
+      if (timerRef.current) window.clearTimeout(timerRef.current);
+      timerRef.current = window.setTimeout(() => {
+        if (map.getZoom() < 15) {
+          map.flyTo([userPosition.lat, userPosition.lng], 16, { duration: 1.2, animate: true });
+        }
+      }, 5000);
+    },
+  });
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) window.clearTimeout(timerRef.current);
+    };
+  }, []);
+
+  return null;
+}
+
 function ClickHandler({ onClick }: { onClick?: (lat: number, lng: number) => void }) {
   useMapEvents({
     click(e) {
@@ -328,6 +361,8 @@ export type DeliveryMapProps = {
    * When null, map stays north-up.
    */
   bearing?: number | null;
+  autoZoomBack?: boolean;
+  onMapReady?: (map: L.Map) => void;
 };
 
 export default function DeliveryMap({
@@ -360,6 +395,8 @@ export default function DeliveryMap({
   routeLegs,
   showRouteOverlay = true,
   bearing = null,
+  autoZoomBack = false,
+  onMapReady,
 }: DeliveryMapProps) {
   const sortedDeliveries = useMemo(
     () =>
@@ -466,9 +503,10 @@ export default function DeliveryMap({
         center={depot ? [depot.lat, depot.lng] : SPB_CENTER}
         zoom={initialZoom}
         scrollWheelZoom={interactive && !rotated}
-        zoomControl={interactive && !rotated}
+        zoomControl={false}
         dragging={interactive && !rotated}
         doubleClickZoom={interactive && !rotated}
+        touchZoom={interactive}
         attributionControl={false}
         style={{ height: "100%", width: "100%", background: theme === "dark" ? "#0a0a0a" : "#f5f5f5" }}
       >
@@ -726,6 +764,8 @@ export default function DeliveryMap({
             </Marker>
           </>
         )}
+        {autoZoomBack && userPosition && <AutoZoomBack userPosition={userPosition} />}
+        <MapReadyReporter onMapReady={onMapReady} />
       </MapContainer>
       </div>
       {rotated && (

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import L from "leaflet";
 import { useGeolocation, type GeoPosition } from "@/lib/geolocation";
 import { type PendingOrder } from "@/lib/deliveries";
 import type { Depot, ResolvedJob } from "@/lib/store";
@@ -197,6 +198,8 @@ export default function DriveMode({
   const lastBuiltRouteIdRef = useRef<string | null>(null);
   const finishAnnouncedRef = useRef<boolean>(false);
   const lastModeRef = useRef<Mode>(mode);
+  const simPausedForCompletionRef = useRef<boolean>(false);
+  const mapRef = useRef<L.Map | null>(null);
 
   useEffect(() => {
     voiceRef.current.setMuted(muted);
@@ -380,8 +383,33 @@ export default function DriveMode({
     if (routeRequest.builtAt !== simBuiltAtRef.current) {
       simBuiltAtRef.current = routeRequest.builtAt;
       simDistRef.current = 0;
+      // If we paused for a stop completion, auto-restart the sim now that
+      // the new route geometry is ready.
+      if (simEnabled && simPausedForCompletionRef.current) {
+        simPausedForCompletionRef.current = false;
+        setSimRunning(true);
+      }
     }
-  }, [routeRequest?.builtAt]);
+  }, [routeRequest?.builtAt, simEnabled]);
+
+  // When a stop arrival is confirmed (completing dialog appears) in sim mode,
+  // pause the sim so it doesn't keep dragging the blue line past the stop.
+  useEffect(() => {
+    if (!simEnabled) return;
+    if (completing) {
+      simPausedForCompletionRef.current = true;
+      setSimRunning(false);
+    }
+  }, [simEnabled, completing?.id]);
+
+  // When mode switches to "returning" and the sim is enabled, auto-start
+  // so the driver doesn't have to press ▶ again for the depot leg.
+  useEffect(() => {
+    if (!simEnabled) return;
+    if (routeRequest?.kind !== "return") return;
+    simPausedForCompletionRef.current = false;
+    setSimRunning(true);
+  }, [simEnabled, routeRequest?.kind]);
 
   useEffect(() => {
     if (!simEnabled || !simRunning) return;
@@ -1075,12 +1103,27 @@ export default function DriveMode({
           routeLegs={routeLegs}
           maneuvers={maneuvers}
           showRouteOverlay={routeVisible}
+          autoZoomBack={!!position}
+          onMapReady={(m) => { mapRef.current = m; }}
           bearing={
             courseUp && (mode === "driving" || mode === "returning")
               ? smoothedHeading
               : null
           }
         />
+        {/* Zoom buttons — work even when course-up CSS rotation is active */}
+        <div className="absolute bottom-16 left-3 z-[1200] flex flex-col gap-1.5 pointer-events-auto">
+          <button
+            onClick={() => mapRef.current?.zoomIn()}
+            className="w-9 h-9 rounded-md border border-border bg-card/95 backdrop-blur text-[18px] font-bold flex items-center justify-center shadow-md hover:bg-muted transition-colors leading-none"
+            title="Приблизить"
+          >+</button>
+          <button
+            onClick={() => mapRef.current?.zoomOut()}
+            className="w-9 h-9 rounded-md border border-border bg-card/95 backdrop-blur text-[18px] font-bold flex items-center justify-center shadow-md hover:bg-muted transition-colors leading-none"
+            title="Отдалить"
+          >−</button>
+        </div>
 
         {/* Stops side panel toggle */}
         {(mode === "driving" || mode === "returning") && totalStops > 0 && (

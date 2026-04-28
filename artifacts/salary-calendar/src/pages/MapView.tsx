@@ -33,6 +33,7 @@ import {
   setRoutingProfile,
   type RouteProfile,
 } from "@/lib/routing";
+import L from "leaflet";
 import DeliveryMap from "@/components/DeliveryMap";
 import DriveMode from "@/components/DriveMode";
 import { cn } from "@/lib/utils";
@@ -115,6 +116,7 @@ export default function MapView() {
   const [gpsEnabled, setGpsEnabled] = useState(false);
   const [driving, setDriving] = useState(false);
   const [depotEditOpen, setDepotEditOpen] = useState(false);
+  const mapRef = useRef<L.Map | null>(null);
 
   const { position: userPosition, status: gpsStatus } = useGeolocation(gpsEnabled);
 
@@ -463,12 +465,26 @@ export default function MapView() {
             flyTo={flyTo}
             showRoute={showRoute}
             showPendingRoute={!isViewingFinishedWave}
+            onMapReady={(m) => { mapRef.current = m; }}
             pendingRouteGeometry={
               isViewingFinishedWave
                 ? visibleWave?.delivery?.geometry ?? null
                 : pendingRoute.route?.geometry ?? null
             }
           />
+          {/* Zoom controls */}
+          <div className="absolute bottom-12 left-3 z-[500] flex flex-col gap-1">
+            <button
+              onClick={() => mapRef.current?.zoomIn()}
+              className="w-8 h-8 rounded-md border border-border bg-card/95 backdrop-blur text-[16px] font-bold flex items-center justify-center shadow hover:bg-muted transition-colors leading-none"
+              title="Приблизить"
+            >+</button>
+            <button
+              onClick={() => mapRef.current?.zoomOut()}
+              className="w-8 h-8 rounded-md border border-border bg-card/95 backdrop-blur text-[16px] font-bold flex items-center justify-center shadow hover:bg-muted transition-colors leading-none"
+              title="Отдалить"
+            >−</button>
+          </div>
           <WaveTabs
             activeWave={wavesStore.activeWave}
             selectedWaveId={wavesStore.selectedWaveId}
@@ -547,26 +563,26 @@ export default function MapView() {
           address={addingPoint.address}
           jobs={salary.jobs}
           onCancel={() => setAddingPoint(null)}
-          onSubmitDelivery={(jobId, amount) => {
+          onSubmitDelivery={(jobId, amount, fullAddress) => {
             const d = deliveriesStore.addDelivery({
               jobId,
               amountRub: amount,
               lat: addingPoint.lat,
               lng: addingPoint.lng,
-              address: addingPoint.address,
+              address: fullAddress,
               timestamp: Date.now(),
             });
             setSelectedId(d.id);
             setAddingPoint(null);
           }}
-          onSubmitPending={(jobId) => {
+          onSubmitPending={(jobId, fullAddress) => {
             const job = salary.jobs.find((j) => j.id === jobId);
             wavesStore.ensureActiveWave();
             const stop = wavesStore.addStop({
               jobId,
               lat: addingPoint.lat,
               lng: addingPoint.lng,
-              address: addingPoint.address,
+              address: fullAddress,
               priceRub: job?.perOrderRateRub,
             });
             setSelectedId(stop.id);
@@ -742,7 +758,9 @@ function SearchBox({ onPick }: { onPick: (r: GeocodeResult) => void }) {
   const [results, setResults] = useState<GeocodeResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
+  const [listening, setListening] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const recognitionRef = useRef<any>(null);
 
   useEffect(() => {
     if (query.trim().length < 3) {
@@ -768,16 +786,55 @@ function SearchBox({ onPick }: { onPick: (r: GeocodeResult) => void }) {
     };
   }, [query]);
 
+  const startVoice = () => {
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SR) {
+      alert("Голосовой ввод не поддерживается в этом браузере");
+      return;
+    }
+    if (listening) {
+      recognitionRef.current?.stop();
+      setListening(false);
+      return;
+    }
+    const recognition = new SR();
+    recognition.lang = "ru-RU";
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+    recognition.onresult = (e: any) => {
+      const transcript = e.results[0][0].transcript;
+      setQuery(transcript);
+      setListening(false);
+    };
+    recognition.onerror = () => setListening(false);
+    recognition.onend = () => setListening(false);
+    recognitionRef.current = recognition;
+    recognition.start();
+    setListening(true);
+  };
+
   return (
     <div className="absolute top-3 right-3 z-[500] w-[280px]">
-      <div className="rounded-md border border-border bg-background/90 backdrop-blur-sm overflow-hidden">
+      <div className="rounded-md border border-border bg-background/90 backdrop-blur-sm overflow-hidden flex items-center">
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onFocus={() => results.length > 0 && setOpen(true)}
           placeholder="Поиск адреса в Питере…"
-          className="w-full h-9 px-3 bg-transparent text-[12px] text-foreground placeholder:text-muted-foreground focus:outline-none"
+          className="flex-1 h-9 px-3 bg-transparent text-[12px] text-foreground placeholder:text-muted-foreground focus:outline-none min-w-0"
         />
+        <button
+          onClick={startVoice}
+          className={cn(
+            "shrink-0 w-9 h-9 flex items-center justify-center transition-colors",
+            listening
+              ? "text-red-500 animate-pulse"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+          title={listening ? "Остановить запись" : "Голосовой поиск адреса"}
+        >
+          {listening ? "⏹" : "🎤"}
+        </button>
       </div>
       {open && (results.length > 0 || loading) && (
         <div className="mt-1 rounded-md border border-border bg-popover overflow-hidden max-h-[260px] overflow-y-auto shadow-lg">
@@ -1376,8 +1433,8 @@ function AddDeliveryDialog({
   address?: string;
   jobs: ResolvedJob[];
   onCancel: () => void;
-  onSubmitDelivery: (jobId: JobId, amount: number) => void;
-  onSubmitPending: (jobId: JobId) => void;
+  onSubmitDelivery: (jobId: JobId, amount: number, fullAddress: string) => void;
+  onSubmitPending: (jobId: JobId, fullAddress: string) => void;
 }) {
   const initialJob = jobs[0]?.id || "ozon";
   const [jobId, setJobId] = useState<JobId>(initialJob);
@@ -1387,12 +1444,18 @@ function AddDeliveryDialog({
       ? String(initialJobObj.perOrderRateRub)
       : "",
   );
+  const [entrance, setEntrance] = useState("");
 
   // re-fill amount default when job changes
   useEffect(() => {
     const job = jobs.find((j) => j.id === jobId);
     if (job && job.perOrderRateRub > 0) setAmount(String(job.perOrderRateRub));
   }, [jobId, jobs]);
+
+  const baseAddress = address || `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+  const fullAddress = entrance.trim()
+    ? `${baseAddress} (пд. ${entrance.trim()})`
+    : baseAddress;
 
   return (
     <div
@@ -1415,8 +1478,20 @@ function AddDeliveryDialog({
           </button>
         </div>
 
-        <div className="text-[11px] text-foreground">
-          {address || `${lat.toFixed(5)}, ${lng.toFixed(5)}`}
+        <div className="text-[11px] text-foreground leading-snug">{fullAddress}</div>
+
+        <div className="flex items-center gap-2">
+          <label className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground shrink-0">
+            Подъезд
+          </label>
+          <input
+            inputMode="numeric"
+            value={entrance}
+            onChange={(e) => setEntrance(e.target.value.replace(/\D/g, ""))}
+            placeholder="№"
+            className="w-16 h-8 px-2 rounded-md border border-border bg-background text-[13px] tabular-nums focus:outline-none focus:border-foreground/40 text-center"
+          />
+          <span className="text-[10px] text-muted-foreground">(необязательно)</span>
         </div>
 
         <div className="flex items-center gap-1.5">
@@ -1438,7 +1513,7 @@ function AddDeliveryDialog({
 
         <button
           type="button"
-          onClick={() => onSubmitPending(jobId)}
+          onClick={() => onSubmitPending(jobId, fullAddress)}
           className="w-full h-11 rounded-md bg-primary text-primary-foreground text-[12px] font-semibold uppercase tracking-[0.2em]"
         >
           + в маршрут
@@ -1453,7 +1528,7 @@ function AddDeliveryDialog({
             e.preventDefault();
             const v = Number(amount);
             if (!Number.isFinite(v) || v <= 0) return;
-            onSubmitDelivery(jobId, v);
+            onSubmitDelivery(jobId, v, fullAddress);
           }}
         >
           <div className="flex items-center gap-2">
@@ -1599,30 +1674,14 @@ function WaveTabs({
 }) {
   const activePending = activeWave?.stops.filter((s) => s.status === "pending").length ?? 0;
   const activeDone = activeWave?.stops.filter((s) => s.status === "delivered").length ?? 0;
-  const previewingFinished = !!selectedWaveId;
-
-  // If there's nothing to show, render nothing.
-  if (!activeWave && !previewingFinished) return null;
 
   return (
     <div className="absolute top-3 left-3 right-3 z-[450] pointer-events-none">
       <div className="pointer-events-auto rounded-md bg-background/90 backdrop-blur-sm border border-border shadow-lg overflow-x-auto">
         <div className="flex items-stretch divide-x divide-border min-w-min">
-          {previewingFinished && (
-            <button
-              onClick={onClearSelection}
-              className="px-3 py-2 text-[10px] uppercase tracking-[0.18em] flex items-center gap-2 whitespace-nowrap text-primary hover:bg-muted transition-colors"
-              title="Скрыть архивную волну с карты"
-            >
-              ← к активной
-            </button>
-          )}
           {activeWave && (
             <div
-              className={cn(
-                "px-3 py-2 text-[10px] uppercase tracking-[0.18em] flex items-center gap-2 whitespace-nowrap",
-                previewingFinished ? "text-muted-foreground" : "text-foreground",
-              )}
+              className="px-3 py-2 text-[10px] uppercase tracking-[0.18em] flex items-center gap-2 whitespace-nowrap text-foreground"
               title="Текущая волна заказов"
             >
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
