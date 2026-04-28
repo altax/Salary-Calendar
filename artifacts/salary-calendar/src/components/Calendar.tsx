@@ -19,6 +19,7 @@ import {
 } from "date-fns";
 import { ru } from "date-fns/locale";
 import { motion, AnimatePresence } from "framer-motion";
+import { Link } from "wouter";
 import {
   Popover,
   PopoverContent,
@@ -37,6 +38,8 @@ import {
   dayTotal,
   isScheduledByAnchor,
 } from "@/lib/store";
+import { useDeliveriesStore, deliveriesByDay } from "@/lib/deliveries";
+import DayDetailModal from "@/components/DayDetailModal";
 import { cn } from "@/lib/utils";
 
 const CURRENCIES: { code: Currency; symbol: string }[] = [
@@ -2016,6 +2019,26 @@ export default function Calendar() {
     dostaevsky: "",
   });
   const [monthPickerOpen, setMonthPickerOpen] = useState(false);
+  const [dayModalDate, setDayModalDate] = useState<Date | null>(null);
+
+  const onDeliveryDelta = useCallback(
+    ({ dateIso, jobId, delta }: { dateIso: string; jobId: JobId; delta: number }) => {
+      const cur = entries[dateIso] || {};
+      const next: Partial<Record<JobId, number>> = {};
+      for (const j of jobs) {
+        const v = cur[j.id];
+        if (typeof v === "number" && v > 0) next[j.id] = v;
+      }
+      const curJob = next[jobId] || 0;
+      const newJob = Math.max(0, Math.round((curJob + delta) * 100) / 100);
+      if (newJob > 0) next[jobId] = newJob;
+      else delete next[jobId];
+      setDayEntries(dateIso, next, "RUB", { skipUndo: true, skipRecent: true });
+    },
+    [entries, jobs, setDayEntries],
+  );
+
+  const deliveriesStore = useDeliveriesStore(onDeliveryDelta);
   const [pickerYear, setPickerYear] = useState(() => new Date().getFullYear());
   const [yearViewOpen, setYearViewOpen] = useState(false);
   const [yearViewYear, setYearViewYear] = useState(
@@ -2652,6 +2675,14 @@ export default function Calendar() {
               ))}
             </div>
             <div className="w-px h-5 bg-border mx-1.5" />
+            <Link
+              href="/map"
+              className="h-7 px-3 text-[11px] font-medium uppercase tracking-[0.2em] text-foreground border border-border rounded-md hover:bg-muted transition-colors flex items-center"
+              title="Карта доставок"
+            >
+              карта →
+            </Link>
+            <div className="w-px h-5 bg-border mx-1.5" />
             <ThemeToggle theme={theme} onToggle={toggleTheme} />
             <DataMenu
               exportData={exportData}
@@ -2832,9 +2863,24 @@ export default function Calendar() {
                                 <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
                                   {format(day, "d MMMM yyyy", { locale: ru })}
                                 </span>
-                                <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
-                                  {currency}
-                                </span>
+                                <div className="flex items-center gap-2">
+                                  {deliveriesByDay(deliveriesStore.deliveries, key).length > 0 && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setOpenKey(null);
+                                        setDayModalDate(day);
+                                      }}
+                                      className="text-[10px] uppercase tracking-[0.2em] text-foreground hover:text-foreground/80 transition-colors flex items-center gap-1"
+                                      title="Карта дня и список доставок"
+                                    >
+                                      ◇ карта · {deliveriesByDay(deliveriesStore.deliveries, key).length}
+                                    </button>
+                                  )}
+                                  <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+                                    {currency}
+                                  </span>
+                                </div>
                               </div>
 
                               <form
@@ -3251,6 +3297,23 @@ export default function Calendar() {
       </AnimatePresence>
 
       <ToastFlash message={toast} />
+
+      <DayDetailModal
+        open={dayModalDate !== null}
+        date={dayModalDate}
+        deliveries={
+          dayModalDate
+            ? deliveriesByDay(
+                deliveriesStore.deliveries,
+                format(dayModalDate, "yyyy-MM-dd"),
+              )
+            : []
+        }
+        jobs={jobs}
+        theme={theme}
+        onClose={() => setDayModalDate(null)}
+        onRemoveDelivery={(id) => deliveriesStore.removeDelivery(id)}
+      />
     </div>
   );
 }

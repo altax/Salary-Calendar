@@ -26,9 +26,31 @@ const TAX_RATE_KEY = "salary-calendar:tax-rate:v1";
 const CATEGORIES_KEY = "salary-calendar:categories:v1";
 const JOB_CONFIGS_KEY = "salary-calendar:job-configs:v1";
 const RECENT_AMOUNTS_KEY = "salary-calendar:recent-amounts:v1";
+const MAP_RESET_FLAG = "salary-calendar:reset:map-v1";
 
 const UNDO_LIMIT = 30;
 const RECENT_AMOUNTS_LIMIT = 6;
+
+(function runMapMigrationOnce() {
+  if (typeof localStorage === "undefined") return;
+  try {
+    if (localStorage.getItem(MAP_RESET_FLAG)) return;
+    const toRemove: string[] = [];
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const k = localStorage.key(i);
+      if (
+        k &&
+        k.startsWith("salary-calendar:") &&
+        k !== MAP_RESET_FLAG &&
+        k !== "salary-calendar:theme:v1"
+      ) {
+        toRemove.push(k);
+      }
+    }
+    for (const k of toRemove) localStorage.removeItem(k);
+    localStorage.setItem(MAP_RESET_FLAG, "1");
+  } catch {}
+})();
 
 export type SchedulePattern = { work: number; off: number };
 export type Theme = "dark" | "light";
