@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   startOfMonth,
   endOfMonth,
@@ -7,18 +7,28 @@ import {
   differenceInCalendarDays,
   setDate,
   parseISO,
+  subDays,
 } from "date-fns";
 
 const ENTRIES_V2_KEY = "salary-calendar:entries:v2";
 const ENTRIES_V3_KEY = "salary-calendar:entries:v3";
 const CURRENCY_KEY = "salary-calendar:currency:v2";
 const RATES_KEY = "salary-calendar:rates:v1";
-const OBLIGATIONS_KEY = "salary-calendar:obligations:v1";
+const OBLIGATIONS_KEY = "salary-calendar:obligations:v2";
+const OBLIGATIONS_LEGACY_KEY = "salary-calendar:obligations:v1";
 const SCHEDULE_LEGACY_KEY = "salary-calendar:schedule:v1";
 const SCHEDULE_ANCHORS_KEY = "salary-calendar:schedule-anchors:v1";
 const SCHEDULE_OVERRIDES_KEY = "salary-calendar:schedule-overrides:v1";
 const GOAL_KEY = "salary-calendar:goal:v1";
 const THEME_KEY = "salary-calendar:theme:v1";
+const SAVINGS_GOAL_KEY = "salary-calendar:savings-goal:v1";
+const TAX_RATE_KEY = "salary-calendar:tax-rate:v1";
+const CATEGORIES_KEY = "salary-calendar:categories:v1";
+const JOB_CONFIGS_KEY = "salary-calendar:job-configs:v1";
+const RECENT_AMOUNTS_KEY = "salary-calendar:recent-amounts:v1";
+
+const UNDO_LIMIT = 30;
+const RECENT_AMOUNTS_LIMIT = 6;
 
 export type SchedulePattern = { work: number; off: number };
 export type Theme = "dark" | "light";
@@ -30,25 +40,32 @@ export const SCHEDULE_PATTERNS: { id: string; label: string; pattern: SchedulePa
   { id: "1/3", label: "1/3", pattern: { work: 1, off: 3 } },
 ];
 
+export type Category = {
+  id: string;
+  name: string;
+};
+
+export const DEFAULT_CATEGORIES: Category[] = [
+  { id: "housing", name: "жильё" },
+  { id: "food", name: "еда" },
+  { id: "telecom", name: "связь" },
+  { id: "subs", name: "подписки" },
+  { id: "transport", name: "транспорт" },
+  { id: "other", name: "разное" },
+];
+
 export type Obligation = {
   id: string;
   name: string;
   amountRub: number;
+  categoryId?: string;
 };
 
-function loadObligations(): Obligation[] {
-  try {
-    const raw = localStorage.getItem(OBLIGATIONS_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) return parsed as Obligation[];
-  } catch {}
-  return [];
-}
-
-function makeId() {
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
-}
+export type SavingsGoal = {
+  name: string;
+  targetRub: number;
+  deadlineIso: string;
+};
 
 export type Currency = "RUB" | "USD" | "EUR";
 export type JobId = "ozon" | "dostaevsky";
@@ -62,6 +79,87 @@ export type ScheduleAnchor = {
 };
 export type ScheduleAnchors = Partial<Record<JobId, ScheduleAnchor>>;
 export type ScheduleOverrides = Record<string, Partial<Record<JobId, boolean>>>;
+
+export type JobConfig = {
+  label?: string;
+  short?: string;
+  color?: string | null;
+};
+export type JobConfigs = Partial<Record<JobId, JobConfig>>;
+
+export type ResolvedJob = {
+  id: JobId;
+  short: string;
+  label: string;
+  color: string | null;
+};
+
+export const DEFAULT_JOBS: ResolvedJob[] = [
+  { id: "ozon", short: "о", label: "Озон ПВЗ", color: null },
+  { id: "dostaevsky", short: "д", label: "Достаевский", color: null },
+];
+
+export const JOB_COLOR_PALETTE: { value: string; label: string }[] = [
+  { value: "#0f172a", label: "графит" },
+  { value: "#0ea5e9", label: "синий" },
+  { value: "#10b981", label: "зелёный" },
+  { value: "#f59e0b", label: "янтарь" },
+  { value: "#ef4444", label: "красный" },
+  { value: "#8b5cf6", label: "фиолет" },
+  { value: "#ec4899", label: "розовый" },
+  { value: "#64748b", label: "сланец" },
+];
+
+// Backwards-compatible "JOBS" export used as a fallback; UI should use the
+// store-resolved `jobs` for live customization.
+export const JOBS = DEFAULT_JOBS;
+
+const ALLOWED: Currency[] = ["RUB", "USD", "EUR"];
+
+type Rates = {
+  base: "RUB";
+  values: Record<Currency, number>;
+  fetchedAt: number;
+};
+
+const FALLBACK_RATES: Rates = {
+  base: "RUB",
+  values: { RUB: 1, USD: 1 / 92, EUR: 1 / 100 },
+  fetchedAt: 0,
+};
+
+const RATE_TTL_MS = 6 * 60 * 60 * 1000;
+
+function makeId() {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function loadObligations(): Obligation[] {
+  try {
+    const raw = localStorage.getItem(OBLIGATIONS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed as Obligation[];
+    }
+    // Migrate v1 (no categories)
+    const legacy = localStorage.getItem(OBLIGATIONS_LEGACY_KEY);
+    if (legacy) {
+      const parsed = JSON.parse(legacy);
+      if (Array.isArray(parsed)) return parsed as Obligation[];
+    }
+  } catch {}
+  return [];
+}
+
+function loadCategories(): Category[] {
+  try {
+    const raw = localStorage.getItem(CATEGORIES_KEY);
+    if (!raw) return DEFAULT_CATEGORIES;
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.length > 0) return parsed as Category[];
+  } catch {}
+  return DEFAULT_CATEGORIES;
+}
 
 function loadScheduleAnchors(): ScheduleAnchors {
   try {
@@ -93,6 +191,59 @@ function loadGoal(): number | null {
   return null;
 }
 
+function loadSavingsGoal(): SavingsGoal | null {
+  try {
+    const raw = localStorage.getItem(SAVINGS_GOAL_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (
+      parsed &&
+      typeof parsed.name === "string" &&
+      typeof parsed.targetRub === "number" &&
+      typeof parsed.deadlineIso === "string"
+    ) {
+      return parsed as SavingsGoal;
+    }
+  } catch {}
+  return null;
+}
+
+function loadTaxRate(): number {
+  try {
+    const raw = localStorage.getItem(TAX_RATE_KEY);
+    if (!raw) return 0;
+    const parsed = JSON.parse(raw);
+    if (typeof parsed === "number" && parsed >= 0 && parsed <= 50) return parsed;
+  } catch {}
+  return 0;
+}
+
+function loadJobConfigs(): JobConfigs {
+  try {
+    const raw = localStorage.getItem(JOB_CONFIGS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") return parsed as JobConfigs;
+  } catch {}
+  return {};
+}
+
+function loadRecentAmounts(): Record<JobId, number[]> {
+  try {
+    const raw = localStorage.getItem(RECENT_AMOUNTS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") {
+        return {
+          ozon: Array.isArray(parsed.ozon) ? parsed.ozon : [],
+          dostaevsky: Array.isArray(parsed.dostaevsky) ? parsed.dostaevsky : [],
+        };
+      }
+    }
+  } catch {}
+  return { ozon: [], dostaevsky: [] };
+}
+
 function loadTheme(): Theme {
   try {
     const raw = localStorage.getItem(THEME_KEY);
@@ -100,27 +251,6 @@ function loadTheme(): Theme {
   } catch {}
   return "dark";
 }
-
-export const JOBS: { id: JobId; short: string; label: string }[] = [
-  { id: "ozon", short: "о", label: "Озон ПВЗ" },
-  { id: "dostaevsky", short: "д", label: "Достаевский" },
-];
-
-const ALLOWED: Currency[] = ["RUB", "USD", "EUR"];
-
-type Rates = {
-  base: "RUB";
-  values: Record<Currency, number>;
-  fetchedAt: number;
-};
-
-const FALLBACK_RATES: Rates = {
-  base: "RUB",
-  values: { RUB: 1, USD: 1 / 92, EUR: 1 / 100 },
-  fetchedAt: 0,
-};
-
-const RATE_TTL_MS = 6 * 60 * 60 * 1000;
 
 function loadCachedRates(): Rates {
   try {
@@ -176,7 +306,7 @@ function loadEntries(): Entries {
 export function dayTotal(entry: DayEntry | undefined): number {
   if (!entry) return 0;
   let sum = 0;
-  for (const job of JOBS) {
+  for (const job of DEFAULT_JOBS) {
     const v = entry[job.id];
     if (typeof v === "number") sum += v;
   }
@@ -193,10 +323,27 @@ export function isScheduledByAnchor(
   if (cycle <= 0) return false;
   const anchorDate = parseISO(anchor.anchorIso);
   const diff = differenceInCalendarDays(date, anchorDate);
-  // Use modulo that handles negative diffs (cycle continues backwards too)
   const mod = ((diff % cycle) + cycle) % cycle;
   return mod < anchor.pattern.work;
 }
+
+function resolveJobs(configs: JobConfigs): ResolvedJob[] {
+  return DEFAULT_JOBS.map((j) => {
+    const cfg = configs[j.id] || {};
+    return {
+      id: j.id,
+      short: (cfg.short || j.short).slice(0, 2),
+      label: cfg.label || j.label,
+      color: cfg.color ?? null,
+    };
+  });
+}
+
+type UndoEntry = {
+  type: "day";
+  dateIso: string;
+  prev: DayEntry | undefined;
+};
 
 export function useSalaryStore() {
   const [entries, setEntries] = useState<Entries>(() => loadEntries());
@@ -213,6 +360,7 @@ export function useSalaryStore() {
   const [obligations, setObligations] = useState<Obligation[]>(() =>
     loadObligations(),
   );
+  const [categories, setCategories] = useState<Category[]>(() => loadCategories());
   const [scheduleAnchors, setScheduleAnchors] = useState<ScheduleAnchors>(
     () => loadScheduleAnchors(),
   );
@@ -220,7 +368,21 @@ export function useSalaryStore() {
     () => loadScheduleOverrides(),
   );
   const [goalRub, setGoalRub] = useState<number | null>(() => loadGoal());
+  const [savingsGoal, setSavingsGoalState] = useState<SavingsGoal | null>(
+    () => loadSavingsGoal(),
+  );
+  const [taxRate, setTaxRateState] = useState<number>(() => loadTaxRate());
+  const [jobConfigs, setJobConfigs] = useState<JobConfigs>(() => loadJobConfigs());
+  const [recentAmounts, setRecentAmounts] = useState<Record<JobId, number[]>>(
+    () => loadRecentAmounts(),
+  );
   const [theme, setThemeState] = useState<Theme>(() => loadTheme());
+
+  // Undo stack stays in a ref so it doesn't trigger re-renders.
+  const undoStackRef = useRef<UndoEntry[]>([]);
+  const [undoCount, setUndoCount] = useState(0);
+
+  const jobs = resolveJobs(jobConfigs);
 
   // Apply theme to <html> root
   useEffect(() => {
@@ -252,6 +414,10 @@ export function useSalaryStore() {
   }, [obligations]);
 
   useEffect(() => {
+    localStorage.setItem(CATEGORIES_KEY, JSON.stringify(categories));
+  }, [categories]);
+
+  useEffect(() => {
     localStorage.setItem(SCHEDULE_ANCHORS_KEY, JSON.stringify(scheduleAnchors));
   }, [scheduleAnchors]);
 
@@ -263,6 +429,23 @@ export function useSalaryStore() {
     if (goalRub == null) localStorage.removeItem(GOAL_KEY);
     else localStorage.setItem(GOAL_KEY, JSON.stringify(goalRub));
   }, [goalRub]);
+
+  useEffect(() => {
+    if (savingsGoal == null) localStorage.removeItem(SAVINGS_GOAL_KEY);
+    else localStorage.setItem(SAVINGS_GOAL_KEY, JSON.stringify(savingsGoal));
+  }, [savingsGoal]);
+
+  useEffect(() => {
+    localStorage.setItem(TAX_RATE_KEY, JSON.stringify(taxRate));
+  }, [taxRate]);
+
+  useEffect(() => {
+    localStorage.setItem(JOB_CONFIGS_KEY, JSON.stringify(jobConfigs));
+  }, [jobConfigs]);
+
+  useEffect(() => {
+    localStorage.setItem(RECENT_AMOUNTS_KEY, JSON.stringify(recentAmounts));
+  }, [recentAmounts]);
 
   useEffect(() => {
     const cached = loadCachedRates();
@@ -301,13 +484,35 @@ export function useSalaryStore() {
     [rates],
   );
 
+  const pushUndo = (entry: UndoEntry) => {
+    const stack = undoStackRef.current;
+    stack.push(entry);
+    if (stack.length > UNDO_LIMIT) stack.shift();
+    setUndoCount(stack.length);
+  };
+
+  const recordRecentAmount = (jobId: JobId, amountRub: number) => {
+    if (!Number.isFinite(amountRub) || amountRub <= 0) return;
+    const rounded = Math.round(amountRub);
+    setRecentAmounts((prev) => {
+      const cur = prev[jobId] || [];
+      const filtered = cur.filter((v) => v !== rounded);
+      filtered.unshift(rounded);
+      return {
+        ...prev,
+        [jobId]: filtered.slice(0, RECENT_AMOUNTS_LIMIT),
+      };
+    });
+  };
+
   const setDayEntries = (
     dateIso: string,
     amountsInDisplay: Partial<Record<JobId, number>>,
     displayCurrency: Currency,
+    options?: { skipUndo?: boolean; skipRecent?: boolean },
   ) => {
     const next: DayEntry = {};
-    for (const job of JOBS) {
+    for (const job of DEFAULT_JOBS) {
       const raw = amountsInDisplay[job.id];
       if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0)
         continue;
@@ -317,19 +522,53 @@ export function useSalaryStore() {
     }
     setEntries((prev) => {
       const updated = { ...prev };
+      const before = prev[dateIso];
       if (Object.keys(next).length === 0) {
+        if (before === undefined) return prev;
         delete updated[dateIso];
       } else {
         updated[dateIso] = next;
       }
+      if (!options?.skipUndo) {
+        pushUndo({ type: "day", dateIso, prev: before });
+      }
       return updated;
     });
+    if (!options?.skipRecent) {
+      for (const job of DEFAULT_JOBS) {
+        const v = next[job.id];
+        if (typeof v === "number" && v > 0) {
+          recordRecentAmount(job.id, v);
+        }
+      }
+    }
+  };
+
+  const undoLastDayEntry = (): boolean => {
+    const stack = undoStackRef.current;
+    const top = stack.pop();
+    setUndoCount(stack.length);
+    if (!top) return false;
+    if (top.type === "day") {
+      setEntries((prev) => {
+        const updated = { ...prev };
+        if (top.prev === undefined) {
+          delete updated[top.dateIso];
+        } else {
+          updated[top.dateIso] = top.prev;
+        }
+        return updated;
+      });
+      return true;
+    }
+    return false;
   };
 
   const addObligation = (
     name: string,
     amountInDisplay: number,
     displayCurrency: Currency,
+    categoryId?: string,
   ) => {
     const trimmed = name.trim();
     if (!trimmed || !Number.isFinite(amountInDisplay) || amountInDisplay <= 0)
@@ -344,6 +583,7 @@ export function useSalaryStore() {
         id: makeId(),
         name: trimmed,
         amountRub: Math.round(amountRub * 100) / 100,
+        categoryId,
       },
     ]);
   };
@@ -353,6 +593,7 @@ export function useSalaryStore() {
     name: string,
     amountInDisplay: number,
     displayCurrency: Currency,
+    categoryId?: string,
   ) => {
     const trimmed = name.trim();
     if (!trimmed || !Number.isFinite(amountInDisplay) || amountInDisplay <= 0)
@@ -364,7 +605,12 @@ export function useSalaryStore() {
     setObligations((prev) =>
       prev.map((o) =>
         o.id === id
-          ? { ...o, name: trimmed, amountRub: Math.round(amountRub * 100) / 100 }
+          ? {
+              ...o,
+              name: trimmed,
+              amountRub: Math.round(amountRub * 100) / 100,
+              categoryId,
+            }
           : o,
       ),
     );
@@ -372,6 +618,31 @@ export function useSalaryStore() {
 
   const removeObligation = (id: string) => {
     setObligations((prev) => prev.filter((o) => o.id !== id));
+  };
+
+  const addCategory = (name: string): Category | null => {
+    const trimmed = name.trim();
+    if (!trimmed) return null;
+    const cat: Category = { id: makeId(), name: trimmed };
+    setCategories((prev) => [...prev, cat]);
+    return cat;
+  };
+
+  const renameCategory = (id: string, name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    setCategories((prev) =>
+      prev.map((c) => (c.id === id ? { ...c, name: trimmed } : c)),
+    );
+  };
+
+  const removeCategory = (id: string) => {
+    setCategories((prev) => prev.filter((c) => c.id !== id));
+    setObligations((prev) =>
+      prev.map((o) =>
+        o.categoryId === id ? { ...o, categoryId: undefined } : o,
+      ),
+    );
   };
 
   const setGoal = (amountInDisplay: number, displayCurrency: Currency) => {
@@ -388,11 +659,63 @@ export function useSalaryStore() {
 
   const clearGoal = () => setGoalRub(null);
 
-  /**
-   * Set/replace the rolling schedule anchor for a job. The anchor is
-   * `startDayInMonth` of `monthDate` and the cycle continues forwards
-   * AND backwards from there indefinitely.
-   */
+  const setSavingsGoal = (
+    name: string,
+    amountInDisplay: number,
+    deadlineIso: string,
+    displayCurrency: Currency,
+  ) => {
+    const trimmed = name.trim();
+    if (!trimmed || !Number.isFinite(amountInDisplay) || amountInDisplay <= 0) {
+      return;
+    }
+    if (!deadlineIso) return;
+    const targetRub =
+      displayCurrency === "RUB"
+        ? amountInDisplay
+        : amountInDisplay / rates.values[displayCurrency];
+    setSavingsGoalState({
+      name: trimmed,
+      targetRub: Math.round(targetRub * 100) / 100,
+      deadlineIso,
+    });
+  };
+
+  const clearSavingsGoal = () => setSavingsGoalState(null);
+
+  const setTaxRate = (rate: number) => {
+    if (!Number.isFinite(rate) || rate < 0 || rate > 50) return;
+    setTaxRateState(rate);
+  };
+
+  const setJobConfig = (
+    jobId: JobId,
+    cfg: { label?: string; short?: string; color?: string | null },
+  ) => {
+    setJobConfigs((prev) => {
+      const next: JobConfigs = { ...prev };
+      const cur = next[jobId] || {};
+      next[jobId] = {
+        ...cur,
+        ...(cfg.label !== undefined ? { label: cfg.label.trim() || undefined } : {}),
+        ...(cfg.short !== undefined ? { short: cfg.short.trim().slice(0, 2) || undefined } : {}),
+        ...(cfg.color !== undefined ? { color: cfg.color } : {}),
+      };
+      // Drop empty configs entirely
+      const v = next[jobId]!;
+      if (!v.label && !v.short && !v.color) delete next[jobId];
+      return next;
+    });
+  };
+
+  const resetJobConfig = (jobId: JobId) => {
+    setJobConfigs((prev) => {
+      const next = { ...prev };
+      delete next[jobId];
+      return next;
+    });
+  };
+
   const applyScheduleAnchor = (
     jobId: JobId,
     pattern: SchedulePattern,
@@ -414,7 +737,6 @@ export function useSalaryStore() {
         pattern,
       },
     }));
-    // Drop any per-day overrides for this job (they would conflict with new anchor)
     setScheduleOverrides((prev) => {
       const next: ScheduleOverrides = {};
       for (const [k, v] of Object.entries(prev)) {
@@ -425,7 +747,6 @@ export function useSalaryStore() {
     });
   };
 
-  /** Remove anchor and overrides for a single job entirely. */
   const clearScheduleForJob = (jobId: JobId) => {
     setScheduleAnchors((prev) => {
       const next = { ...prev };
@@ -442,7 +763,6 @@ export function useSalaryStore() {
     });
   };
 
-  /** Toggle a single day's schedule status for a job (on -> off / off -> on). */
   const toggleScheduleDay = (jobId: JobId, date: Date) => {
     const key = format(date, "yyyy-MM-dd");
     const anchor = scheduleAnchors[jobId];
@@ -453,7 +773,6 @@ export function useSalaryStore() {
       const newValue =
         explicit === undefined ? !baseScheduled : !explicit;
 
-      // If newValue matches base, remove override (collapse to default)
       let nextDay: Partial<Record<JobId, boolean>> = { ...cur };
       if (newValue === baseScheduled) {
         delete nextDay[jobId];
@@ -475,7 +794,7 @@ export function useSalaryStore() {
       const key = format(date, "yyyy-MM-dd");
       const overrides = scheduleOverrides[key] || {};
       const result: JobId[] = [];
-      for (const job of JOBS) {
+      for (const job of DEFAULT_JOBS) {
         const explicit = overrides[job.id];
         const isOn =
           explicit !== undefined
@@ -488,18 +807,51 @@ export function useSalaryStore() {
     [scheduleAnchors, scheduleOverrides],
   );
 
-  // --- Backup / restore ---
+  /** Sum of all entries (in RUB) over an arbitrary day range. */
+  const sumRangeRub = useCallback(
+    (startDate: Date, endDate: Date): number => {
+      let sum = 0;
+      const days = eachDayOfInterval({ start: startDate, end: endDate });
+      for (const d of days) {
+        const entry = entries[format(d, "yyyy-MM-dd")];
+        if (entry) sum += dayTotal(entry);
+      }
+      return sum;
+    },
+    [entries],
+  );
+
+  /** Streak in days, counting back from today (inclusive). */
+  const computeStreak = useCallback((): number => {
+    let streak = 0;
+    const today = new Date();
+    for (let i = 0; i < 365; i += 1) {
+      const d = subDays(today, i);
+      const entry = entries[format(d, "yyyy-MM-dd")];
+      if (entry && dayTotal(entry) > 0) streak += 1;
+      else if (i === 0) {
+        // Today not yet logged — try yesterday onward
+        continue;
+      } else break;
+    }
+    return streak;
+  }, [entries]);
 
   const exportData = () => {
     return {
-      version: 1,
+      version: 2,
       exportedAt: new Date().toISOString(),
       entries,
       currency,
       obligations,
+      categories,
       scheduleAnchors,
       scheduleOverrides,
       goalRub,
+      savingsGoal,
+      taxRate,
+      jobConfigs,
+      recentAmounts,
       theme,
     };
   };
@@ -517,6 +869,9 @@ export function useSalaryStore() {
       if (Array.isArray(d.obligations)) {
         setObligations(d.obligations as Obligation[]);
       }
+      if (Array.isArray(d.categories) && d.categories.length > 0) {
+        setCategories(d.categories as Category[]);
+      }
       if (d.scheduleAnchors && typeof d.scheduleAnchors === "object") {
         setScheduleAnchors(d.scheduleAnchors as ScheduleAnchors);
       }
@@ -525,6 +880,27 @@ export function useSalaryStore() {
       }
       if (typeof d.goalRub === "number" || d.goalRub === null) {
         setGoalRub((d.goalRub as number | null) ?? null);
+      }
+      if (d.savingsGoal === null) setSavingsGoalState(null);
+      else if (
+        d.savingsGoal &&
+        typeof d.savingsGoal === "object"
+      ) {
+        const sg = d.savingsGoal as SavingsGoal;
+        if (sg.name && sg.targetRub > 0 && sg.deadlineIso) {
+          setSavingsGoalState(sg);
+        }
+      }
+      if (typeof d.taxRate === "number") setTaxRateState(d.taxRate);
+      if (d.jobConfigs && typeof d.jobConfigs === "object") {
+        setJobConfigs(d.jobConfigs as JobConfigs);
+      }
+      if (d.recentAmounts && typeof d.recentAmounts === "object") {
+        const r = d.recentAmounts as Record<string, unknown>;
+        setRecentAmounts({
+          ozon: Array.isArray(r.ozon) ? (r.ozon as number[]) : [],
+          dostaevsky: Array.isArray(r.dostaevsky) ? (r.dostaevsky as number[]) : [],
+        });
       }
       if (d.theme === "dark" || d.theme === "light") {
         setThemeState(d.theme);
@@ -540,12 +916,18 @@ export function useSalaryStore() {
     currency,
     setCurrency,
     setDayEntries,
+    undoLastDayEntry,
+    undoCount,
     convert,
     rates,
     obligations,
     addObligation,
     updateObligation,
     removeObligation,
+    categories,
+    addCategory,
+    renameCategory,
+    removeCategory,
     scheduleAnchors,
     scheduleOverrides,
     applyScheduleAnchor,
@@ -555,10 +937,22 @@ export function useSalaryStore() {
     goalRub,
     setGoal,
     clearGoal,
+    savingsGoal,
+    setSavingsGoal,
+    clearSavingsGoal,
+    taxRate,
+    setTaxRate,
+    jobs,
+    jobConfigs,
+    setJobConfig,
+    resetJobConfig,
+    recentAmounts,
     theme,
     setTheme,
     toggleTheme,
     exportData,
     importData,
+    sumRangeRub,
+    computeStreak,
   };
 }

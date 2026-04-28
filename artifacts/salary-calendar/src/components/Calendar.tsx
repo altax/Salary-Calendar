@@ -13,10 +13,9 @@ import {
   isWeekend,
   setMonth,
   setYear,
-  isBefore,
-  isAfter,
   subDays,
   parseISO,
+  differenceInCalendarDays,
 } from "date-fns";
 import { ru } from "date-fns/locale";
 import { motion, AnimatePresence } from "framer-motion";
@@ -30,10 +29,13 @@ import {
   type Currency,
   type JobId,
   type Obligation,
+  type Category,
   type SchedulePattern,
-  JOBS,
+  type ResolvedJob,
   SCHEDULE_PATTERNS,
+  JOB_COLOR_PALETTE,
   dayTotal,
+  isScheduledByAnchor,
 } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
@@ -118,6 +120,61 @@ function TileLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
+function JobBadge({
+  job,
+  size = "sm",
+  active = true,
+  className,
+}: {
+  job: ResolvedJob;
+  size?: "xs" | "sm" | "md" | "lg";
+  active?: boolean;
+  className?: string;
+}) {
+  const sizeCls =
+    size === "lg"
+      ? "w-5 h-5 text-[10px]"
+      : size === "md"
+        ? "w-4 h-4 text-[9px]"
+        : size === "xs"
+          ? "w-3 h-3 text-[7px]"
+          : "w-3.5 h-3.5 text-[8px]";
+
+  if (job.color) {
+    return (
+      <span
+        style={{ backgroundColor: job.color, color: "#fff" }}
+        className={cn(
+          sizeCls,
+          "inline-flex items-center justify-center rounded-sm font-bold uppercase tracking-tight leading-none transition-opacity",
+          !active && "opacity-35",
+          className,
+        )}
+      >
+        {job.short}
+      </span>
+    );
+  }
+
+  // Default styling: first job filled, second outlined
+  const isFirst = job.id === "ozon";
+  return (
+    <span
+      className={cn(
+        sizeCls,
+        "inline-flex items-center justify-center rounded-sm font-bold uppercase tracking-tight leading-none transition-opacity",
+        isFirst
+          ? "bg-foreground/80 text-background"
+          : "border border-foreground/60 text-foreground/80",
+        !active && "opacity-35",
+        className,
+      )}
+    >
+      {job.short}
+    </span>
+  );
+}
+
 function NumericInput({
   value,
   onChange,
@@ -161,12 +218,38 @@ function NumericInput({
   );
 }
 
+function ChipSuggestions({
+  values,
+  onPick,
+}: {
+  values: number[];
+  onPick: (value: number) => void;
+}) {
+  if (values.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-1">
+      {values.map((v) => (
+        <button
+          key={v}
+          type="button"
+          onClick={() => onPick(v)}
+          className="h-5 px-1.5 text-[10px] tabular-nums rounded border border-border text-muted-foreground hover:text-foreground hover:border-foreground/50 hover:bg-muted/40 transition-colors"
+        >
+          {formatNumber(v)}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function SchedulePicker({
   currentDate,
+  jobs,
   onApply,
   onClear,
 }: {
   currentDate: Date;
+  jobs: ResolvedJob[];
   onApply: (
     jobId: JobId,
     pattern: SchedulePattern,
@@ -228,7 +311,7 @@ function SchedulePicker({
               работа
             </span>
             <div className="flex items-center rounded-md border border-border overflow-hidden">
-              {JOBS.map((j) => (
+              {jobs.map((j) => (
                 <button
                   key={j.id}
                   onClick={() => setJob(j.id)}
@@ -239,20 +322,7 @@ function SchedulePicker({
                       : "text-muted-foreground hover:text-foreground hover:bg-muted",
                   )}
                 >
-                  <span
-                    className={cn(
-                      "w-3.5 h-3.5 inline-flex items-center justify-center rounded-sm text-[8px] font-bold uppercase",
-                      job === j.id
-                        ? j.id === "ozon"
-                          ? "bg-primary-foreground text-primary"
-                          : "border border-primary-foreground text-primary-foreground"
-                        : j.id === "ozon"
-                          ? "bg-foreground/80 text-background"
-                          : "border border-foreground/60 text-foreground/80",
-                    )}
-                  >
-                    {j.short}
-                  </span>
+                  <JobBadge job={j} size="sm" />
                   <span className="truncate">{j.label}</span>
                 </button>
               ))}
@@ -327,46 +397,201 @@ function SchedulePicker({
   );
 }
 
+function CategoryPicker({
+  categories,
+  value,
+  onChange,
+  onAddCategory,
+}: {
+  categories: Category[];
+  value: string | undefined;
+  onChange: (id: string | undefined) => void;
+  onAddCategory: (name: string) => Category | null;
+}) {
+  const [adding, setAdding] = useState(false);
+  const [name, setName] = useState("");
+
+  const handleAdd = () => {
+    const cat = onAddCategory(name);
+    if (cat) {
+      onChange(cat.id);
+      setAdding(false);
+      setName("");
+    }
+  };
+
+  return (
+    <div className="space-y-1.5">
+      <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+        категория
+      </span>
+      <div className="flex flex-wrap gap-1">
+        <button
+          type="button"
+          onClick={() => onChange(undefined)}
+          className={cn(
+            "h-6 px-2 text-[10px] uppercase tracking-[0.15em] rounded border transition-colors",
+            value === undefined
+              ? "bg-foreground text-background border-foreground"
+              : "border-border text-muted-foreground hover:text-foreground hover:bg-muted",
+          )}
+        >
+          без
+        </button>
+        {categories.map((c) => (
+          <button
+            key={c.id}
+            type="button"
+            onClick={() => onChange(c.id)}
+            className={cn(
+              "h-6 px-2 text-[10px] uppercase tracking-[0.15em] rounded border transition-colors",
+              value === c.id
+                ? "bg-foreground text-background border-foreground"
+                : "border-border text-muted-foreground hover:text-foreground hover:bg-muted",
+            )}
+          >
+            {c.name}
+          </button>
+        ))}
+        {!adding && (
+          <button
+            type="button"
+            onClick={() => setAdding(true)}
+            className="h-6 px-2 text-[10px] uppercase tracking-[0.15em] rounded border border-dashed border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+          >
+            +
+          </button>
+        )}
+      </div>
+      {adding && (
+        <div className="flex gap-1.5">
+          <input
+            autoFocus
+            placeholder="название"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                handleAdd();
+              }
+              if (e.key === "Escape") {
+                setAdding(false);
+                setName("");
+              }
+            }}
+            maxLength={20}
+            className="flex-1 h-7 px-2 text-xs bg-background border border-border rounded-md focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary"
+          />
+          <button
+            type="button"
+            onClick={handleAdd}
+            className="h-7 px-2 text-[10px] uppercase tracking-[0.15em] bg-primary text-primary-foreground rounded-md hover:opacity-90"
+          >
+            ок
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ObligationsPanel({
   obligations,
+  categories,
   currency,
   convert,
   freeAmount,
+  taxRate,
+  taxAmount,
+  taxDueLabel,
+  taxDueAmount,
   onAdd,
   onUpdate,
   onRemove,
+  onAddCategory,
+  onSetTaxRate,
 }: {
   obligations: Obligation[];
+  categories: Category[];
   currency: Currency;
   convert: (amount: number, from: Currency, to: Currency) => number;
   freeAmount: number;
-  onAdd: (name: string, amount: number, currency: Currency) => void;
+  taxRate: number;
+  taxAmount: number;
+  taxDueLabel: string | null;
+  taxDueAmount: number;
+  onAdd: (
+    name: string,
+    amount: number,
+    currency: Currency,
+    categoryId?: string,
+  ) => void;
   onUpdate: (
     id: string,
     name: string,
     amount: number,
     currency: Currency,
+    categoryId?: string,
   ) => void;
   onRemove: (id: string) => void;
+  onAddCategory: (name: string) => Category | null;
+  onSetTaxRate: (rate: number) => void;
 }) {
   const [addOpen, setAddOpen] = useState(false);
   const [newName, setNewName] = useState("");
   const [newAmount, setNewAmount] = useState("");
+  const [newCategoryId, setNewCategoryId] = useState<string | undefined>();
   const [editId, setEditId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editAmount, setEditAmount] = useState("");
+  const [editCategoryId, setEditCategoryId] = useState<string | undefined>();
+  const [taxOpen, setTaxOpen] = useState(false);
 
   const total = obligations.reduce(
     (s, o) => s + convert(o.amountRub, "RUB", currency),
     0,
   );
 
+  // Group obligations by category for display
+  const grouped = useMemo(() => {
+    const map = new Map<string, Obligation[]>();
+    for (const o of obligations) {
+      const key = o.categoryId || "__none";
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(o);
+    }
+    return map;
+  }, [obligations]);
+
+  const groupTotal = (items: Obligation[]) =>
+    items.reduce((s, o) => s + convert(o.amountRub, "RUB", currency), 0);
+
+  // Build display order: categories with items first, then orphan group
+  const displayGroups: { id: string; name: string; items: Obligation[] }[] = [];
+  for (const c of categories) {
+    const items = grouped.get(c.id) || [];
+    if (items.length > 0) displayGroups.push({ id: c.id, name: c.name, items });
+  }
+  const orphan = grouped.get("__none") || [];
+  // Also any items with categoryId not in categories list
+  const unknownIds: Obligation[] = [];
+  for (const [k, items] of grouped.entries()) {
+    if (k === "__none") continue;
+    if (!categories.find((c) => c.id === k)) unknownIds.push(...items);
+  }
+  const allOrphan = [...orphan, ...unknownIds];
+  if (allOrphan.length > 0) {
+    displayGroups.push({ id: "__none", name: "без категории", items: allOrphan });
+  }
+
   const handleAdd = () => {
     const num = parseInt(newAmount || "0", 10);
     if (!newName.trim() || !Number.isFinite(num) || num <= 0) return;
-    onAdd(newName, num, currency);
+    onAdd(newName, num, currency, newCategoryId);
     setNewName("");
     setNewAmount("");
+    setNewCategoryId(undefined);
     setAddOpen(false);
   };
 
@@ -374,8 +599,103 @@ function ObligationsPanel({
     if (!editId) return;
     const num = parseInt(editAmount || "0", 10);
     if (!editName.trim() || !Number.isFinite(num) || num <= 0) return;
-    onUpdate(editId, editName, num, currency);
+    onUpdate(editId, editName, num, currency, editCategoryId);
     setEditId(null);
+  };
+
+  const renderObligationRow = (o: Obligation) => {
+    const displayAmount = convert(o.amountRub, "RUB", currency);
+    const isEditing = editId === o.id;
+    return (
+      <li key={o.id}>
+        <Popover
+          open={isEditing}
+          onOpenChange={(open) => {
+            if (open) {
+              setEditId(o.id);
+              setEditName(o.name);
+              setEditAmount(String(Math.round(displayAmount)));
+              setEditCategoryId(o.categoryId);
+            } else if (isEditing) {
+              setEditId(null);
+            }
+          }}
+        >
+          <PopoverTrigger asChild>
+            <button className="w-full flex items-center justify-between gap-2 px-4 py-1.5 hover:bg-muted/40 transition-colors text-left outline-none focus-visible:ring-1 focus-visible:ring-primary focus-visible:ring-inset">
+              <span className="text-[11px] truncate min-w-0 flex-1">
+                {o.name}
+              </span>
+              <span className="text-xs font-semibold tabular-nums shrink-0">
+                <MoneyTicker
+                  value={displayAmount}
+                  currency={currency}
+                />
+              </span>
+            </button>
+          </PopoverTrigger>
+          <PopoverContent
+            align="end"
+            sideOffset={4}
+            className="w-[280px] p-3"
+          >
+            <div className="space-y-2.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+                  обязанность
+                </span>
+                <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+                  {currency}
+                </span>
+              </div>
+              <input
+                autoFocus
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    handleSaveEdit();
+                  }
+                }}
+                maxLength={40}
+                className="w-full h-8 px-2.5 text-sm bg-background border border-border rounded-md focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary"
+              />
+              <NumericInput
+                value={editAmount}
+                onChange={setEditAmount}
+                onSubmit={handleSaveEdit}
+              />
+              <CategoryPicker
+                categories={categories}
+                value={editCategoryId}
+                onChange={setEditCategoryId}
+                onAddCategory={onAddCategory}
+              />
+              <div className="flex items-center justify-between gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    onRemove(o.id);
+                    setEditId(null);
+                  }}
+                  className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground hover:text-destructive transition-colors"
+                >
+                  удалить
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveEdit}
+                  className="h-8 px-4 text-xs font-medium uppercase tracking-[0.15em] bg-primary text-primary-foreground rounded-md hover:opacity-90"
+                >
+                  сохранить
+                </button>
+              </div>
+            </div>
+          </PopoverContent>
+        </Popover>
+      </li>
+    );
   };
 
   return (
@@ -389,6 +709,7 @@ function ObligationsPanel({
             if (open) {
               setNewName("");
               setNewAmount("");
+              setNewCategoryId(undefined);
             }
           }}
         >
@@ -403,7 +724,7 @@ function ObligationsPanel({
           <PopoverContent
             align="end"
             sideOffset={8}
-            className="w-[260px] p-3"
+            className="w-[280px] p-3"
           >
             <div className="space-y-2.5">
               <div className="flex items-center justify-between">
@@ -434,6 +755,12 @@ function ObligationsPanel({
                 onChange={setNewAmount}
                 onSubmit={handleAdd}
               />
+              <CategoryPicker
+                categories={categories}
+                value={newCategoryId}
+                onChange={setNewCategoryId}
+                onAddCategory={onAddCategory}
+              />
               <div className="flex justify-end pt-1">
                 <button
                   type="button"
@@ -448,115 +775,111 @@ function ObligationsPanel({
         </Popover>
       </div>
 
-      <ul className="flex-1 overflow-auto divide-y divide-border">
-        {obligations.length === 0 && (
-          <li className="px-4 py-6 text-center text-[11px] text-muted-foreground leading-relaxed">
+      <div className="flex-1 overflow-auto">
+        {obligations.length === 0 ? (
+          <div className="px-4 py-6 text-center text-[11px] text-muted-foreground leading-relaxed">
             нажмите <span className="text-foreground">+</span>
             <br />
             чтобы добавить
             <br />
             аренду, интернет и т.д.
-          </li>
+          </div>
+        ) : (
+          displayGroups.map((g) => {
+            const subtotal = groupTotal(g.items);
+            return (
+              <div key={g.id} className="border-b border-border last:border-b-0">
+                <div className="px-4 pt-2 pb-1 flex items-baseline justify-between">
+                  <span className="text-[9px] uppercase tracking-[0.25em] text-muted-foreground/70">
+                    {g.name}
+                  </span>
+                  <span className="text-[10px] tabular-nums text-muted-foreground/70">
+                    {formatMoney(subtotal, currency)}
+                  </span>
+                </div>
+                <ul className="divide-y divide-border/40">
+                  {g.items.map(renderObligationRow)}
+                </ul>
+              </div>
+            );
+          })
         )}
-        {obligations.map((o) => {
-          const displayAmount = convert(o.amountRub, "RUB", currency);
-          const isEditing = editId === o.id;
-          return (
-            <li key={o.id}>
-              <Popover
-                open={isEditing}
-                onOpenChange={(open) => {
-                  if (open) {
-                    setEditId(o.id);
-                    setEditName(o.name);
-                    setEditAmount(String(Math.round(displayAmount)));
-                  } else if (isEditing) {
-                    setEditId(null);
-                  }
-                }}
-              >
-                <PopoverTrigger asChild>
-                  <button className="w-full flex items-center justify-between gap-2 px-4 py-2 hover:bg-muted/40 transition-colors text-left outline-none focus-visible:ring-1 focus-visible:ring-primary focus-visible:ring-inset">
-                    <span className="text-[11px] truncate min-w-0 flex-1">
-                      {o.name}
-                    </span>
-                    <span className="text-xs font-semibold tabular-nums shrink-0">
-                      <MoneyTicker
-                        value={displayAmount}
-                        currency={currency}
-                      />
-                    </span>
-                  </button>
-                </PopoverTrigger>
-                <PopoverContent
-                  align="end"
-                  sideOffset={4}
-                  className="w-[260px] p-3"
+      </div>
+
+      {(obligations.length > 0 || taxRate > 0) && (
+        <div className="border-t border-border shrink-0 bg-muted/20 divide-y divide-border">
+          {obligations.length > 0 && (
+            <div className="px-4 py-2 flex items-center justify-between">
+              <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+                всего
+              </span>
+              <span className="text-sm font-semibold tabular-nums">
+                <MoneyTicker value={total} currency={currency} />
+              </span>
+            </div>
+          )}
+
+          {/* Tax row (always visible, lets user enable) */}
+          <div className="px-4 py-2 flex items-center justify-between">
+            <Popover open={taxOpen} onOpenChange={setTaxOpen}>
+              <PopoverTrigger asChild>
+                <button
+                  className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground hover:text-foreground transition-colors flex items-baseline gap-1"
+                  aria-label="Настроить налог"
                 >
-                  <div className="space-y-2.5">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
-                        обязанность
-                      </span>
-                      <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
-                        {currency}
-                      </span>
-                    </div>
-                    <input
-                      autoFocus
-                      value={editName}
-                      onChange={(e) => setEditName(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          e.preventDefault();
-                          handleSaveEdit();
-                        }
-                      }}
-                      maxLength={40}
-                      className="w-full h-8 px-2.5 text-sm bg-background border border-border rounded-md focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary"
-                    />
-                    <NumericInput
-                      value={editAmount}
-                      onChange={setEditAmount}
-                      onSubmit={handleSaveEdit}
-                    />
-                    <div className="flex items-center justify-between gap-2 pt-1">
+                  <span>налог</span>
+                  <span className="tabular-nums">
+                    {taxRate > 0 ? `${taxRate}%` : "—"}
+                  </span>
+                </button>
+              </PopoverTrigger>
+              <PopoverContent align="end" sideOffset={8} className="w-[220px] p-3">
+                <div className="space-y-2">
+                  <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+                    ставка налога
+                  </span>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {[0, 4, 6].map((r) => (
                       <button
+                        key={r}
                         type="button"
                         onClick={() => {
-                          onRemove(o.id);
-                          setEditId(null);
+                          onSetTaxRate(r);
+                          setTaxOpen(false);
                         }}
-                        className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground hover:text-destructive transition-colors"
+                        className={cn(
+                          "h-8 rounded-md text-xs font-medium tabular-nums transition-colors border",
+                          taxRate === r
+                            ? "bg-primary text-primary-foreground border-primary"
+                            : "border-border text-muted-foreground hover:text-foreground hover:bg-muted",
+                        )}
                       >
-                        удалить
+                        {r === 0 ? "нет" : `${r}%`}
                       </button>
-                      <button
-                        type="button"
-                        onClick={handleSaveEdit}
-                        className="h-8 px-4 text-xs font-medium uppercase tracking-[0.15em] bg-primary text-primary-foreground rounded-md hover:opacity-90"
-                      >
-                        сохранить
-                      </button>
-                    </div>
+                    ))}
                   </div>
-                </PopoverContent>
-              </Popover>
-            </li>
-          );
-        })}
-      </ul>
-
-      {obligations.length > 0 && (
-        <div className="border-t border-border shrink-0 bg-muted/20 divide-y divide-border">
-          <div className="px-4 py-2 flex items-center justify-between">
-            <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
-              всего
-            </span>
-            <span className="text-sm font-semibold tabular-nums">
-              <MoneyTicker value={total} currency={currency} />
+                  <p className="text-[9px] text-muted-foreground/70 leading-snug pt-1">
+                    самозанятый: 4% с физлиц, 6% с юрлиц
+                  </p>
+                </div>
+              </PopoverContent>
+            </Popover>
+            <span
+              className={cn(
+                "text-sm font-semibold tabular-nums",
+                taxRate > 0 ? "text-foreground" : "text-muted-foreground/40",
+              )}
+            >
+              {taxRate > 0 ? (
+                <>
+                  −<MoneyTicker value={taxAmount} currency={currency} />
+                </>
+              ) : (
+                "—"
+              )}
             </span>
           </div>
+
           <div className="px-4 py-2 flex items-center justify-between">
             <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
               {freeAmount >= 0 ? "свободно" : "не хватает"}
@@ -573,6 +896,17 @@ function ObligationsPanel({
               />
             </span>
           </div>
+
+          {taxRate > 0 && taxDueLabel && taxDueAmount > 0 && (
+            <div className="px-4 py-2 flex items-center justify-between bg-foreground/[0.04]">
+              <span className="text-[10px] uppercase tracking-[0.2em] text-foreground/80">
+                к уплате до {taxDueLabel}
+              </span>
+              <span className="text-sm font-semibold tabular-nums">
+                <MoneyTicker value={taxDueAmount} currency={currency} />
+              </span>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -683,6 +1017,287 @@ function GoalEditor({
   );
 }
 
+function SavingsGoalEditor({
+  savingsGoal,
+  currency,
+  convert,
+  onSet,
+  onClear,
+}: {
+  savingsGoal: { name: string; targetRub: number; deadlineIso: string } | null;
+  currency: Currency;
+  convert: (amount: number, from: Currency, to: Currency) => number;
+  onSet: (
+    name: string,
+    amount: number,
+    deadlineIso: string,
+    currency: Currency,
+  ) => void;
+  onClear: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [amount, setAmount] = useState("");
+  const [deadline, setDeadline] = useState("");
+
+  const displayAmount =
+    savingsGoal != null ? convert(savingsGoal.targetRub, "RUB", currency) : 0;
+
+  useEffect(() => {
+    if (open) {
+      setName(savingsGoal?.name || "");
+      setAmount(
+        savingsGoal != null ? String(Math.round(displayAmount)) : "",
+      );
+      setDeadline(
+        savingsGoal?.deadlineIso || format(addMonths(new Date(), 3), "yyyy-MM-dd"),
+      );
+    }
+  }, [open]);
+
+  const handleSave = () => {
+    const num = parseInt(amount || "0", 10);
+    if (!name.trim() || !Number.isFinite(num) || num <= 0 || !deadline) return;
+    onSet(name, num, deadline, currency);
+    setOpen(false);
+  };
+
+  // Compute days remaining + per-day required
+  let daysLeft = 0;
+  let perDay = 0;
+  if (savingsGoal) {
+    const target = new Date(savingsGoal.deadlineIso);
+    daysLeft = Math.max(1, differenceInCalendarDays(target, new Date()));
+    perDay = displayAmount / daysLeft;
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          className="w-full text-left flex items-center justify-between gap-2 px-3 py-2 rounded-md hover:bg-muted/40 transition-colors -mx-3"
+          aria-label="Копилка"
+        >
+          <div className="flex flex-col items-start min-w-0">
+            <span className="text-[9px] uppercase tracking-[0.25em] text-muted-foreground/70">
+              копилка
+            </span>
+            {savingsGoal ? (
+              <span className="text-[11px] text-foreground truncate max-w-full">
+                {savingsGoal.name}
+              </span>
+            ) : (
+              <span className="text-[11px] text-muted-foreground">
+                + добавить мечту
+              </span>
+            )}
+          </div>
+          {savingsGoal && (
+            <div className="flex flex-col items-end shrink-0">
+              <span className="text-xs font-semibold tabular-nums">
+                {formatMoney(perDay, currency)}/дн
+              </span>
+              <span className="text-[9px] text-muted-foreground tabular-nums">
+                {daysLeft} дн · {formatMoney(displayAmount, currency)}
+              </span>
+            </div>
+          )}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" sideOffset={8} className="w-[260px] p-3">
+        <div className="space-y-2.5">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+              копилка / мечта
+            </span>
+            <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+              {currency}
+            </span>
+          </div>
+          <input
+            autoFocus
+            placeholder="что хочется накопить"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            maxLength={40}
+            className="w-full h-8 px-2.5 text-sm bg-background border border-border rounded-md focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary"
+          />
+          <NumericInput
+            placeholder="сумма, например 50000"
+            value={amount}
+            onChange={setAmount}
+          />
+          <div className="space-y-1">
+            <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+              к дате
+            </span>
+            <input
+              type="date"
+              value={deadline}
+              onChange={(e) => setDeadline(e.target.value)}
+              className="w-full h-8 px-2.5 text-sm bg-background border border-border rounded-md focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary"
+            />
+          </div>
+          <div className="flex items-center justify-between gap-2 pt-1">
+            <button
+              type="button"
+              onClick={() => {
+                onClear();
+                setOpen(false);
+              }}
+              className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground hover:text-destructive transition-colors"
+            >
+              убрать
+            </button>
+            <button
+              type="button"
+              onClick={handleSave}
+              className="h-8 px-4 text-xs font-medium uppercase tracking-[0.15em] bg-primary text-primary-foreground rounded-md hover:opacity-90"
+            >
+              сохранить
+            </button>
+          </div>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function JobEditor({
+  job,
+  onSave,
+  onReset,
+}: {
+  job: ResolvedJob;
+  onSave: (cfg: { label?: string; short?: string; color?: string | null }) => void;
+  onReset: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [label, setLabel] = useState(job.label);
+  const [short, setShort] = useState(job.short);
+  const [color, setColor] = useState<string | null>(job.color);
+
+  useEffect(() => {
+    if (open) {
+      setLabel(job.label);
+      setShort(job.short);
+      setColor(job.color);
+    }
+  }, [open, job.label, job.short, job.color]);
+
+  const handleSave = () => {
+    onSave({ label, short, color });
+    setOpen(false);
+  };
+
+  const previewJob: ResolvedJob = {
+    ...job,
+    label,
+    short,
+    color,
+  };
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          className="flex items-center gap-2 min-w-0 outline-none focus-visible:ring-1 focus-visible:ring-primary rounded-md hover:bg-muted/40 px-1 -mx-1"
+          aria-label={`Настроить ${job.label}`}
+        >
+          <JobBadge job={job} size="md" />
+          <span className="text-[11px] truncate">{job.label}</span>
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" sideOffset={6} className="w-[280px] p-3">
+        <div className="space-y-2.5">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+              работа
+            </span>
+            <JobBadge job={previewJob} size="lg" />
+          </div>
+          <div className="space-y-1">
+            <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+              название
+            </span>
+            <input
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              maxLength={32}
+              className="w-full h-8 px-2.5 text-sm bg-background border border-border rounded-md focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary"
+            />
+          </div>
+          <div className="space-y-1">
+            <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+              значок (1–2 буквы)
+            </span>
+            <input
+              value={short}
+              onChange={(e) => setShort(e.target.value.slice(0, 2))}
+              maxLength={2}
+              className="w-full h-8 px-2.5 text-sm bg-background border border-border rounded-md focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary uppercase tracking-wider"
+            />
+          </div>
+          <div className="space-y-1">
+            <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+              цвет
+            </span>
+            <div className="flex flex-wrap gap-1.5 items-center">
+              <button
+                type="button"
+                onClick={() => setColor(null)}
+                title="по умолчанию"
+                className={cn(
+                  "h-6 w-6 rounded-md border-2 text-[9px] font-medium uppercase flex items-center justify-center transition-colors",
+                  color === null
+                    ? "border-primary"
+                    : "border-border hover:border-foreground/50",
+                )}
+              >
+                —
+              </button>
+              {JOB_COLOR_PALETTE.map((c) => (
+                <button
+                  key={c.value}
+                  type="button"
+                  onClick={() => setColor(c.value)}
+                  title={c.label}
+                  style={{ backgroundColor: c.value }}
+                  className={cn(
+                    "h-6 w-6 rounded-md border-2 transition-colors",
+                    color === c.value
+                      ? "border-primary"
+                      : "border-transparent hover:border-foreground/50",
+                  )}
+                />
+              ))}
+            </div>
+          </div>
+          <div className="flex items-center justify-between gap-2 pt-1">
+            <button
+              type="button"
+              onClick={() => {
+                onReset();
+                setOpen(false);
+              }}
+              className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground hover:text-destructive transition-colors"
+            >
+              сбросить
+            </button>
+            <button
+              type="button"
+              onClick={handleSave}
+              className="h-8 px-4 text-xs font-medium uppercase tracking-[0.15em] bg-primary text-primary-foreground rounded-md hover:opacity-90"
+            >
+              сохранить
+            </button>
+          </div>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 type ExportData = ReturnType<ReturnType<typeof useSalaryStore>["exportData"]>;
 
 function DataMenu({
@@ -690,11 +1305,15 @@ function DataMenu({
   importData,
   buildCsv,
   buildSummary,
+  canUndo,
+  onUndo,
 }: {
   exportData: () => ExportData;
   importData: (data: unknown) => boolean;
   buildCsv: () => string;
   buildSummary: () => string;
+  canUndo: boolean;
+  onUndo: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -777,8 +1396,30 @@ function DataMenu({
             ⋯
           </button>
         </PopoverTrigger>
-        <PopoverContent align="end" sideOffset={8} className="w-[200px] p-1">
+        <PopoverContent align="end" sideOffset={8} className="w-[220px] p-1">
           <div className="flex flex-col">
+            <button
+              type="button"
+              onClick={() => {
+                if (canUndo) {
+                  onUndo();
+                  setOpen(false);
+                }
+              }}
+              disabled={!canUndo}
+              className={cn(
+                "flex items-center justify-between gap-3 px-3 py-2 text-left rounded-md transition-colors",
+                canUndo
+                  ? "hover:bg-muted text-foreground"
+                  : "text-muted-foreground/40 cursor-not-allowed",
+              )}
+            >
+              <span className="text-[11px]">отменить</span>
+              <span className="text-[9px] uppercase tracking-[0.2em] text-muted-foreground">
+                ⌘Z
+              </span>
+            </button>
+            <div className="my-1 h-px bg-border" />
             <MenuItem onClick={handleCopySummary} label="скопировать сводку" hint="буфер" />
             <MenuItem onClick={handleCsv} label="экспорт месяца" hint=".csv" />
             <MenuItem onClick={handleBackup} label="резервная копия" hint=".json" />
@@ -874,12 +1515,153 @@ function Sparkline({
   );
 }
 
+function YearHeatmap({
+  year,
+  entries,
+  currency,
+  convert,
+  onPickDay,
+}: {
+  year: number;
+  entries: Record<string, Partial<Record<JobId, number>>>;
+  currency: Currency;
+  convert: (amount: number, from: Currency, to: Currency) => number;
+  onPickDay: (date: Date) => void;
+}) {
+  const start = new Date(year, 0, 1);
+  const end = new Date(year, 11, 31);
+  const startMonday = startOfWeek(start, WEEK_OPTIONS);
+  const endSunday = endOfWeek(end, WEEK_OPTIONS);
+  const allDays = eachDayOfInterval({ start: startMonday, end: endSunday });
+  const weeks: Date[][] = [];
+  for (let i = 0; i < allDays.length; i += 7) weeks.push(allDays.slice(i, i + 7));
+
+  // Compute max for color scaling
+  let max = 0;
+  for (const d of allDays) {
+    if (d.getFullYear() !== year) continue;
+    const v = convert(dayTotal(entries[format(d, "yyyy-MM-dd")]), "RUB", currency);
+    if (v > max) max = v;
+  }
+
+  // Month labels: position by first column where the month starts
+  const monthLabelCols: { name: string; col: number }[] = [];
+  let lastMonth = -1;
+  weeks.forEach((week, wi) => {
+    for (const d of week) {
+      if (d.getFullYear() !== year) continue;
+      const m = d.getMonth();
+      if (m !== lastMonth) {
+        lastMonth = m;
+        monthLabelCols.push({ name: MONTHS_SHORT[m], col: wi });
+        break;
+      }
+    }
+  });
+
+  // Squeeze duplicates that landed on same column
+  const dedupLabels: { name: string; col: number }[] = [];
+  for (const l of monthLabelCols) {
+    if (!dedupLabels.find((x) => x.col === l.col)) dedupLabels.push(l);
+  }
+
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-baseline gap-2">
+        <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+          {year} · 365 дней
+        </span>
+        <span className="text-[9px] text-muted-foreground/70 ml-auto">
+          мало → много
+        </span>
+        <div className="flex gap-[2px] items-center">
+          {[0.15, 0.3, 0.5, 0.75, 1].map((o) => (
+            <div
+              key={o}
+              className="w-2 h-2 rounded-[1px]"
+              style={{ backgroundColor: `hsl(var(--foreground) / ${o})` }}
+            />
+          ))}
+        </div>
+      </div>
+      <div className="overflow-x-auto">
+        <div className="inline-block">
+          {/* month labels */}
+          <div className="flex gap-[2px] mb-1 pl-[18px]">
+            {weeks.map((_, wi) => {
+              const label = dedupLabels.find((l) => l.col === wi);
+              return (
+                <div
+                  key={wi}
+                  className="w-2.5 h-3 text-[8px] uppercase tracking-tight text-muted-foreground/60"
+                >
+                  {label?.name}
+                </div>
+              );
+            })}
+          </div>
+          <div className="flex gap-[2px]">
+            {/* Weekday labels (Mon, Wed, Fri) */}
+            <div className="flex flex-col gap-[2px] mr-1 text-[8px] uppercase text-muted-foreground/60 leading-none">
+              {["пн", "", "ср", "", "пт", "", ""].map((w, i) => (
+                <div key={i} className="h-2.5 flex items-center">
+                  {w}
+                </div>
+              ))}
+            </div>
+            {weeks.map((week, wi) => (
+              <div key={wi} className="flex flex-col gap-[2px]">
+                {week.map((d) => {
+                  const inYear = d.getFullYear() === year;
+                  if (!inYear) {
+                    return (
+                      <div
+                        key={d.toISOString()}
+                        className="w-2.5 h-2.5"
+                      />
+                    );
+                  }
+                  const v = convert(
+                    dayTotal(entries[format(d, "yyyy-MM-dd")]),
+                    "RUB",
+                    currency,
+                  );
+                  const intensity =
+                    max > 0 && v > 0
+                      ? Math.max(0.15, Math.min(1, 0.15 + (v / max) * 0.85))
+                      : 0;
+                  return (
+                    <button
+                      key={d.toISOString()}
+                      type="button"
+                      onClick={() => onPickDay(d)}
+                      title={`${format(d, "d MMMM", { locale: ru })} · ${formatMoney(v, currency)}`}
+                      style={{
+                        backgroundColor:
+                          v > 0
+                            ? `hsl(var(--foreground) / ${intensity})`
+                            : `hsl(var(--border) / 0.5)`,
+                      }}
+                      className="w-2.5 h-2.5 rounded-[2px] hover:ring-1 hover:ring-primary transition-shadow"
+                    />
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function YearView({
   year,
   setYear,
   entries,
   currency,
   convert,
+  jobs,
   onPickMonth,
   onClose,
 }: {
@@ -888,6 +1670,7 @@ function YearView({
   entries: Record<string, Partial<Record<JobId, number>>>;
   currency: Currency;
   convert: (amount: number, from: Currency, to: Currency) => number;
+  jobs: ResolvedJob[];
   onPickMonth: (date: Date) => void;
   onClose: () => void;
 }) {
@@ -907,7 +1690,7 @@ function YearView({
       for (const d of days) {
         const entry = entries[format(d, "yyyy-MM-dd")];
         if (!entry) continue;
-        for (const job of JOBS) {
+        for (const job of jobs) {
           const v = entry[job.id];
           if (typeof v === "number") {
             perJob[job.id] += convert(v, "RUB", currency);
@@ -928,7 +1711,7 @@ function YearView({
         perJob,
       };
     });
-  }, [year, entries, currency, convert]);
+  }, [year, entries, currency, convert, jobs]);
 
   const yearTotal = months.reduce((s, m) => s + m.total, 0);
   const monthsWithData = months.filter((m) => m.total > 0);
@@ -975,9 +1758,9 @@ function YearView({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="mx-auto max-w-[1280px] p-3 sm:p-4">
+      <div className="mx-auto max-w-[1280px] p-3 sm:p-4 space-y-3">
         {/* Top bar */}
-        <div className="rounded-2xl border border-border bg-card flex items-center justify-between px-4 py-2.5 mb-3">
+        <div className="rounded-2xl border border-border bg-card flex items-center justify-between px-4 py-2.5">
           <div className="flex items-center gap-3">
             <span className="text-[10px] uppercase tracking-[0.3em] text-muted-foreground">
               [год]
@@ -1016,7 +1799,7 @@ function YearView({
         </div>
 
         {/* Year-level stats */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <Tile>
             <div className="px-4 py-3">
               <TileLabel>итого</TileLabel>
@@ -1086,6 +1869,19 @@ function YearView({
           </Tile>
         </div>
 
+        {/* Heatmap */}
+        <Tile>
+          <div className="px-4 py-3">
+            <YearHeatmap
+              year={year}
+              entries={entries}
+              currency={currency}
+              convert={convert}
+              onPickDay={(d) => onPickMonth(d)}
+            />
+          </div>
+        </Tile>
+
         {/* Month grid */}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
           {months.map((m) => {
@@ -1138,18 +1934,14 @@ function YearView({
                   highlight={m.bestIdx}
                 />
                 <div className="flex items-center justify-between text-[10px] tabular-nums text-muted-foreground">
-                  <span className="flex items-center gap-1">
-                    <span className="inline-block w-2.5 h-2.5 rounded-sm bg-foreground/80" />
-                    {m.perJob.ozon > 0
-                      ? formatMoney(m.perJob.ozon, currency)
-                      : "—"}
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <span className="inline-block w-2.5 h-2.5 rounded-sm border border-foreground/60" />
-                    {m.perJob.dostaevsky > 0
-                      ? formatMoney(m.perJob.dostaevsky, currency)
-                      : "—"}
-                  </span>
+                  {jobs.map((j) => (
+                    <span key={j.id} className="flex items-center gap-1">
+                      <JobBadge job={j} size="xs" />
+                      {m.perJob[j.id] > 0
+                        ? formatMoney(m.perJob[j.id], currency)
+                        : "—"}
+                    </span>
+                  ))}
                 </div>
               </button>
             );
@@ -1160,17 +1952,39 @@ function YearView({
   );
 }
 
+function ToastFlash({ message }: { message: string | null }) {
+  return (
+    <AnimatePresence>
+      {message && (
+        <motion.div
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: 8 }}
+          transition={{ duration: 0.15 }}
+          className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 px-3 py-2 rounded-md bg-foreground text-background text-[11px] uppercase tracking-[0.2em] shadow-lg pointer-events-none"
+        >
+          {message}
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+}
+
 export default function Calendar() {
   const {
     entries,
     currency,
     setCurrency,
     setDayEntries,
+    undoLastDayEntry,
+    undoCount,
     convert,
     obligations,
     addObligation,
     updateObligation,
     removeObligation,
+    categories,
+    addCategory,
     scheduleAnchors,
     applyScheduleAnchor,
     clearScheduleForJob,
@@ -1179,10 +1993,20 @@ export default function Calendar() {
     goalRub,
     setGoal,
     clearGoal,
+    savingsGoal,
+    setSavingsGoal,
+    clearSavingsGoal,
+    taxRate,
+    setTaxRate,
+    jobs,
+    setJobConfig,
+    resetJobConfig,
+    recentAmounts,
     theme,
     toggleTheme,
     exportData,
     importData,
+    computeStreak,
   } = useSalaryStore();
 
   const [currentDate, setCurrentDate] = useState(new Date());
@@ -1197,6 +2021,13 @@ export default function Calendar() {
   const [yearViewYear, setYearViewYear] = useState(
     () => new Date().getFullYear(),
   );
+  const [bottomTab, setBottomTab] = useState<"weeks" | "forecast">("weeks");
+  const [toast, setToast] = useState<string | null>(null);
+
+  const flashToast = useCallback((msg: string) => {
+    setToast(msg);
+    setTimeout(() => setToast(null), 1300);
+  }, []);
 
   const openYearView = useCallback(() => {
     setYearViewYear(currentDate.getFullYear());
@@ -1231,7 +2062,7 @@ export default function Calendar() {
   const getJobsWorked = (date: Date): JobId[] => {
     const entry = getDayEntry(date);
     if (!entry) return [];
-    return JOBS.filter((j) => (entry[j.id] ?? 0) > 0).map((j) => j.id);
+    return jobs.filter((j) => (entry[j.id] ?? 0) > 0).map((j) => j.id);
   };
 
   const getWeekTotal = (weekDays: Date[]) =>
@@ -1265,13 +2096,12 @@ export default function Calendar() {
 
   const today = new Date();
 
-  // Per-job monthly totals for the sidebar breakdown
   const perJobMonthTotal = useMemo(() => {
     const totals: Record<JobId, number> = { ozon: 0, dostaevsky: 0 };
     for (const d of monthDays) {
       const entry = getDayEntry(d);
       if (!entry) continue;
-      for (const job of JOBS) {
+      for (const job of jobs) {
         const v = entry[job.id];
         if (typeof v === "number") {
           totals[job.id] += convert(v, "RUB", currency);
@@ -1279,16 +2109,15 @@ export default function Calendar() {
       }
     }
     return totals;
-  }, [monthDays, entries, currency, convert]);
+  }, [monthDays, entries, currency, convert, jobs]);
 
-  // Per-job: average earned on a worked day (used as placeholder hint)
   const perJobDailyAverage = useMemo(() => {
     const sums: Record<JobId, number> = { ozon: 0, dostaevsky: 0 };
     const counts: Record<JobId, number> = { ozon: 0, dostaevsky: 0 };
     for (const d of monthDays) {
       const entry = getDayEntry(d);
       if (!entry) continue;
-      for (const job of JOBS) {
+      for (const job of jobs) {
         const v = entry[job.id];
         if (typeof v === "number" && v > 0) {
           sums[job.id] += convert(v, "RUB", currency);
@@ -1300,24 +2129,19 @@ export default function Calendar() {
       ozon: counts.ozon > 0 ? sums.ozon / counts.ozon : 0,
       dostaevsky: counts.dostaevsky > 0 ? sums.dostaevsky / counts.dostaevsky : 0,
     } as Record<JobId, number>;
-  }, [monthDays, entries, currency, convert]);
+  }, [monthDays, entries, currency, convert, jobs]);
 
-  // Forecast: average per worked day (any job) × remaining scheduled days,
-  // added to current monthTotal. Falls back to averagePerDay × remaining days
-  // when no schedule is set.
   const forecast = useMemo(() => {
     const todayKey = format(today, "yyyy-MM-dd");
     const remainingDays = monthDays.filter((d) => {
       const k = format(d, "yyyy-MM-dd");
-      // strictly after today AND not yet entered
       return k > todayKey && getDayRub(d) === 0;
     });
     if (remainingDays.length === 0) return monthTotal;
     if (averagePerDay <= 0) return monthTotal;
 
-    const anyAnchored = JOBS.some((j) => scheduleAnchors[j.id]);
+    const anyAnchored = jobs.some((j) => scheduleAnchors[j.id]);
     if (!anyAnchored) {
-      // No schedule — assume every remaining day will earn the average.
       return monthTotal + averagePerDay * remainingDays.length;
     }
 
@@ -1333,9 +2157,9 @@ export default function Calendar() {
     scheduleAnchors,
     getScheduledJobsFor,
     entries,
+    jobs,
   ]);
 
-  // Comparison with previous month
   const previousMonthTotal = useMemo(() => {
     const prev = subMonths(currentDate, 1);
     const prevDays = eachDayOfInterval({
@@ -1356,14 +2180,12 @@ export default function Calendar() {
     return ((monthTotal - previousMonthTotal) / previousMonthTotal) * 100;
   }, [monthTotal, previousMonthTotal]);
 
-  // Goal in display currency
   const goalDisplay = goalRub != null ? convert(goalRub, "RUB", currency) : 0;
   const goalPct =
     goalRub != null && goalDisplay > 0
       ? Math.min(200, (monthTotal / goalDisplay) * 100)
       : 0;
 
-  // Obligations totals + free amount
   const obligationsTotal = useMemo(
     () =>
       obligations.reduce(
@@ -1372,15 +2194,54 @@ export default function Calendar() {
       ),
     [obligations, currency, convert],
   );
-  const freeAmount = monthTotal - obligationsTotal;
 
-  // Work / off day counts for header
+  // Tax: based on current month income
+  const taxAmount = useMemo(
+    () => (monthTotal * taxRate) / 100,
+    [monthTotal, taxRate],
+  );
+
+  // Tax due: previous month's accrued tax (samozanyatyi pays by 28th of next month)
+  const { taxDueLabel, taxDueAmount } = useMemo(() => {
+    if (taxRate <= 0) {
+      return { taxDueLabel: null as string | null, taxDueAmount: 0 };
+    }
+    // The tax that's due THIS calendar month is for the PREVIOUS calendar
+    // month's income, payable by the 28th. If we're already past the 28th,
+    // surface NEXT month's due (which is for THIS month's income so far).
+    const now = new Date();
+    let payerMonth: Date;
+    let dueDate: Date;
+    if (now.getDate() <= 28) {
+      payerMonth = subMonths(now, 1);
+      dueDate = setMonth(setYear(new Date(now.getFullYear(), now.getMonth(), 28), now.getFullYear()), now.getMonth());
+    } else {
+      payerMonth = now;
+      const next = addMonths(now, 1);
+      dueDate = new Date(next.getFullYear(), next.getMonth(), 28);
+    }
+    const days = eachDayOfInterval({
+      start: startOfMonth(payerMonth),
+      end: endOfMonth(payerMonth),
+    });
+    let incomeRub = 0;
+    for (const d of days) {
+      const entry = getDayEntry(d);
+      if (entry) incomeRub += dayTotal(entry);
+    }
+    const taxRub = (incomeRub * taxRate) / 100;
+    const taxInDisplay = convert(taxRub, "RUB", currency);
+    const label = format(dueDate, "d MMM", { locale: ru });
+    return { taxDueLabel: label, taxDueAmount: taxInDisplay };
+  }, [taxRate, entries, currency, convert]);
+
+  const freeAmount = monthTotal - obligationsTotal - taxAmount;
+
   const { workCount, offCount } = useMemo(() => {
     let work = 0;
     let off = 0;
-    const anyAnchored = JOBS.some((j) => scheduleAnchors[j.id]);
+    const anyAnchored = jobs.some((j) => scheduleAnchors[j.id]);
     if (!anyAnchored) {
-      // Fall back to "worked = days with entries", "off = days without"
       for (const d of monthDays) {
         if (getDayRub(d) > 0) work += 1;
         else off += 1;
@@ -1394,11 +2255,81 @@ export default function Calendar() {
       else off += 1;
     }
     return { workCount: work, offCount: off };
-  }, [monthDays, scheduleAnchors, getScheduledJobsFor, entries]);
+  }, [monthDays, scheduleAnchors, getScheduledJobsFor, entries, jobs]);
+
+  // Streak: count of consecutive days ending today (or yesterday if today is empty)
+  const streak = useMemo(() => computeStreak(), [entries, computeStreak]);
+
+  // Cashflow forecast: next 3 months (predicted income - obligations - tax)
+  const cashflow = useMemo(() => {
+    // Use rolling 90-day average per worked day, then project per-month based
+    // on number of scheduled days (or working days fallback).
+    const now = new Date();
+    const lookback = 90;
+    let sum = 0;
+    let count = 0;
+    for (let i = 0; i < lookback; i++) {
+      const d = subDays(now, i);
+      const entry = getDayEntry(d);
+      const v = dayTotal(entry);
+      if (v > 0) {
+        sum += convert(v, "RUB", currency);
+        count += 1;
+      }
+    }
+    const avgWorkedDay = count > 0 ? sum / count : averagePerDay;
+    const anyAnchored = jobs.some((j) => scheduleAnchors[j.id]);
+
+    const result: {
+      monthDate: Date;
+      predicted: number;
+      obligations: number;
+      tax: number;
+      net: number;
+    }[] = [];
+    for (let i = 1; i <= 3; i++) {
+      const md = addMonths(currentDate, i);
+      const days = eachDayOfInterval({
+        start: startOfMonth(md),
+        end: endOfMonth(md),
+      });
+      let scheduledDays = 0;
+      for (const d of days) {
+        if (anyAnchored) {
+          if (getScheduledJobsFor(d).length > 0) scheduledDays += 1;
+        } else {
+          // Fallback: treat workdays as Mon-Fri average
+          if (!isWeekend(d)) scheduledDays += 1;
+        }
+      }
+      const predicted = avgWorkedDay * scheduledDays;
+      const tax = (predicted * taxRate) / 100;
+      const net = predicted - obligationsTotal - tax;
+      result.push({
+        monthDate: md,
+        predicted,
+        obligations: obligationsTotal,
+        tax,
+        net,
+      });
+    }
+    return result;
+  }, [
+    entries,
+    currency,
+    convert,
+    averagePerDay,
+    scheduleAnchors,
+    getScheduledJobsFor,
+    obligationsTotal,
+    taxRate,
+    currentDate,
+    jobs,
+  ]);
 
   const handleSave = (date: Date) => {
     const amounts: Partial<Record<JobId, number>> = {};
-    for (const job of JOBS) {
+    for (const job of jobs) {
       const num = parseInt(editValues[job.id] || "0", 10);
       if (Number.isFinite(num) && num > 0) amounts[job.id] = num;
     }
@@ -1416,7 +2347,7 @@ export default function Calendar() {
     const entry = getDayEntry(yesterday);
     if (!entry) return;
     const next: Record<JobId, string> = { ozon: "", dostaevsky: "" };
-    for (const job of JOBS) {
+    for (const job of jobs) {
       const v = entry[job.id];
       if (typeof v === "number" && v > 0) {
         next[job.id] = String(Math.round(convert(v, "RUB", currency)));
@@ -1436,38 +2367,44 @@ export default function Calendar() {
     setMonthPickerOpen(false);
   };
 
-  // CSV + summary builders for the data menu
   const buildCsv = useCallback(() => {
     const lines: string[] = [];
-    lines.push("дата,озон,достаевский,итого,валюта");
+    const headers = ["дата", ...jobs.map((j) => j.label.toLowerCase()), "итого", "валюта"];
+    lines.push(headers.join(","));
     for (const d of monthDays) {
       const key = format(d, "yyyy-MM-dd");
       const entry = entries[key];
-      const ozon = entry?.ozon
-        ? Math.round(convert(entry.ozon, "RUB", currency))
-        : 0;
-      const dost = entry?.dostaevsky
-        ? Math.round(convert(entry.dostaevsky, "RUB", currency))
-        : 0;
-      const total = ozon + dost;
-      lines.push(`${key},${ozon},${dost},${total},${currency}`);
+      const cells: string[] = [key];
+      let total = 0;
+      for (const j of jobs) {
+        const v = entry?.[j.id]
+          ? Math.round(convert(entry[j.id]!, "RUB", currency))
+          : 0;
+        cells.push(String(v));
+        total += v;
+      }
+      cells.push(String(total));
+      cells.push(currency);
+      lines.push(cells.join(","));
     }
     lines.push("");
     lines.push(
       `# итого ${monthName} ${yearStr}: ${Math.round(monthTotal)} ${currency}`,
     );
     return lines.join("\n");
-  }, [monthDays, entries, currency, convert, monthName, yearStr, monthTotal]);
+  }, [monthDays, entries, currency, convert, monthName, yearStr, monthTotal, jobs]);
 
   const buildSummary = useCallback(() => {
     const parts: string[] = [];
     parts.push(
       `${monthName} ${yearStr}: ${formatMoney(monthTotal, currency)}`,
     );
-    const jobBits = JOBS.filter((j) => perJobMonthTotal[j.id] > 0).map(
-      (j) =>
-        `${j.label.toLowerCase()} ${formatMoney(perJobMonthTotal[j.id], currency)}`,
-    );
+    const jobBits = jobs
+      .filter((j) => perJobMonthTotal[j.id] > 0)
+      .map(
+        (j) =>
+          `${j.label.toLowerCase()} ${formatMoney(perJobMonthTotal[j.id], currency)}`,
+      );
     if (jobBits.length) parts.push(jobBits.join(", "));
     parts.push(
       `среднее ${formatMoney(averagePerDay, currency)}/день · ${daysWithEntries} раб. дней`,
@@ -1477,9 +2414,15 @@ export default function Calendar() {
         `обязательства ${formatMoney(obligationsTotal, currency)} → свободно ${formatMoney(freeAmount, currency)}`,
       );
     }
+    if (taxRate > 0) {
+      parts.push(
+        `налог ${taxRate}%: ${formatMoney(taxAmount, currency)}`,
+      );
+    }
     if (goalRub != null && goalDisplay > 0) {
       parts.push(`цель ${formatMoney(goalDisplay, currency)} (${Math.round(goalPct)}%)`);
     }
+    if (streak > 0) parts.push(`серия ${streak} дн`);
     return parts.join(" • ");
   }, [
     monthName,
@@ -1491,21 +2434,39 @@ export default function Calendar() {
     daysWithEntries,
     obligationsTotal,
     freeAmount,
+    taxRate,
+    taxAmount,
     goalRub,
     goalDisplay,
     goalPct,
+    streak,
+    jobs,
   ]);
+
+  const handleUndo = useCallback(() => {
+    const ok = undoLastDayEntry();
+    if (ok) flashToast("отменено");
+    else flashToast("нечего отменять");
+  }, [undoLastDayEntry, flashToast]);
 
   // Keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      // Ignore if a popover is open or focus is in an input/textarea
-      if (openKey || monthPickerOpen) return;
       const target = e.target as HTMLElement | null;
       const tag = target?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable) {
+      const isInput =
+        tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable;
+
+      // Ctrl/Cmd+Z is allowed even with popups open or focus elsewhere
+      if ((e.metaKey || e.ctrlKey) && (e.key === "z" || e.key === "Z" || e.key === "я" || e.key === "Я")) {
+        if (e.shiftKey) return;
+        e.preventDefault();
+        handleUndo();
         return;
       }
+
+      if (openKey || monthPickerOpen) return;
+      if (isInput) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
 
       if (yearViewOpen) return;
@@ -1525,7 +2486,7 @@ export default function Calendar() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [openKey, monthPickerOpen, yearViewOpen, openYearView]);
+  }, [openKey, monthPickerOpen, yearViewOpen, openYearView, handleUndo]);
 
   return (
     <div className="h-[100dvh] w-full bg-background text-foreground overflow-hidden p-3 sm:p-4">
@@ -1617,7 +2578,6 @@ export default function Calendar() {
               </PopoverContent>
             </Popover>
 
-            {/* Work / off day counter */}
             <span
               className="hidden sm:inline-flex items-baseline gap-1.5 text-[10px] uppercase tracking-[0.2em] text-muted-foreground tabular-nums"
               title="Рабочие / выходные дни в месяце"
@@ -1628,6 +2588,17 @@ export default function Calendar() {
               <span className="text-foreground/80">{offCount.toString().padStart(2, "0")}</span>
               <span>вых</span>
             </span>
+
+            {streak > 0 && (
+              <span
+                className="hidden sm:inline-flex items-baseline gap-1 text-[10px] uppercase tracking-[0.2em] text-foreground/80 tabular-nums"
+                title={`Подряд отработано ${streak} дн`}
+              >
+                <span>★</span>
+                <span>{streak}</span>
+                <span className="text-muted-foreground">подряд</span>
+              </span>
+            )}
 
             <button
               onClick={openYearView}
@@ -1687,6 +2658,8 @@ export default function Calendar() {
               importData={importData}
               buildCsv={buildCsv}
               buildSummary={buildSummary}
+              canUndo={undoCount > 0}
+              onUndo={handleUndo}
             />
           </div>
         </header>
@@ -1739,7 +2712,7 @@ export default function Calendar() {
                       const hasEntry = amtRub > 0;
                       const jobsWorked = getJobsWorked(day);
                       const jobsScheduled = getScheduledJobsFor(day);
-                      const visibleJobs = JOBS.filter(
+                      const visibleJobs = jobs.filter(
                         (j) =>
                           jobsWorked.includes(j.id) ||
                           jobsScheduled.includes(j.id),
@@ -1766,7 +2739,7 @@ export default function Calendar() {
                                 dostaevsky: "",
                               };
                               if (entry && isCurrentMonth) {
-                                for (const job of JOBS) {
+                                for (const job of jobs) {
                                   const v = entry[job.id];
                                   if (typeof v === "number" && v > 0) {
                                     const inDisplay = Math.round(
@@ -1785,13 +2758,10 @@ export default function Calendar() {
                           <PopoverTrigger asChild>
                             <button
                               onContextMenu={(e) => {
-                                // Right-click: toggle schedule for the first
-                                // scheduled job, or for ozon by default if
-                                // none is scheduled but at least one is anchored.
                                 if (!isCurrentMonth) return;
                                 const targets = jobsScheduled.length
                                   ? jobsScheduled
-                                  : JOBS.filter((j) => scheduleAnchors[j.id]).map(
+                                  : jobs.filter((j) => scheduleAnchors[j.id]).map(
                                       (j) => j.id,
                                     );
                                 if (targets.length === 0) return;
@@ -1822,25 +2792,17 @@ export default function Calendar() {
                                   {format(day, "dd")}
                                 </span>
 
-                                {/* Job tag markers (worked = full, scheduled-only = faded) */}
                                 {visibleJobs.length > 0 && isCurrentMonth && (
                                   <div className="flex items-center gap-0.5">
                                     {visibleJobs.map((job) => {
                                       const isWorked = jobsWorked.includes(job.id);
                                       return (
-                                        <span
+                                        <JobBadge
                                           key={job.id}
-                                          title={`${job.label}${isWorked ? "" : " (план)"}`}
-                                          className={cn(
-                                            "w-3.5 h-3.5 inline-flex items-center justify-center rounded-sm text-[8px] font-bold uppercase tracking-tight leading-none transition-opacity",
-                                            job.id === "ozon"
-                                              ? "bg-foreground/80 text-background"
-                                              : "border border-foreground/60 text-foreground/80",
-                                            !isWorked && "opacity-35",
-                                          )}
-                                        >
-                                          {job.short}
-                                        </span>
+                                          job={job}
+                                          size="sm"
+                                          active={isWorked}
+                                        />
                                       );
                                     })}
                                   </div>
@@ -1861,7 +2823,7 @@ export default function Calendar() {
                             </button>
                           </PopoverTrigger>
                           <PopoverContent
-                            className="w-[280px] p-3"
+                            className="w-[300px] p-3"
                             align="center"
                             sideOffset={4}
                           >
@@ -1880,9 +2842,9 @@ export default function Calendar() {
                                   e.preventDefault();
                                   handleSave(day);
                                 }}
-                                className="space-y-2"
+                                className="space-y-3"
                               >
-                                {JOBS.map((job, idx) => {
+                                {jobs.map((job, idx) => {
                                   const isOnSchedule = jobsScheduled.includes(
                                     job.id,
                                   );
@@ -1892,46 +2854,63 @@ export default function Calendar() {
                                           Math.round(perJobDailyAverage[job.id]),
                                         )
                                       : "0";
+                                  // Recent amounts are stored in RUB; convert to display
+                                  const chips = (recentAmounts[job.id] || [])
+                                    .map((rub) =>
+                                      Math.round(convert(rub, "RUB", currency)),
+                                    )
+                                    .filter((v, i, arr) => arr.indexOf(v) === i)
+                                    .slice(0, 5);
                                   return (
-                                    <div
-                                      key={job.id}
-                                      className="flex items-center gap-2"
-                                    >
-                                      <button
-                                        type="button"
-                                        onClick={() =>
-                                          toggleScheduleDay(job.id, day)
-                                        }
-                                        title={
-                                          isOnSchedule
-                                            ? "Убрать из графика"
-                                            : "В график"
-                                        }
-                                        className={cn(
-                                          "shrink-0 w-5 h-5 inline-flex items-center justify-center rounded-sm text-[10px] font-bold uppercase transition-opacity",
-                                          job.id === "ozon"
-                                            ? "bg-foreground/80 text-background"
-                                            : "border border-foreground/60 text-foreground/80",
-                                          !isOnSchedule && "opacity-35",
-                                        )}
-                                      >
-                                        {job.short}
-                                      </button>
-                                      <span className="text-[11px] tracking-[0.05em] text-muted-foreground w-[88px] truncate">
-                                        {job.label}
-                                      </span>
-                                      <NumericInput
-                                        autoFocus={idx === 0}
-                                        placeholder={placeholder}
-                                        value={editValues[job.id]}
-                                        onChange={(v) =>
-                                          setEditValues((prev) => ({
-                                            ...prev,
-                                            [job.id]: v,
-                                          }))
-                                        }
-                                        onSubmit={() => handleSave(day)}
-                                      />
+                                    <div key={job.id} className="space-y-1">
+                                      <div className="flex items-center gap-2">
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            toggleScheduleDay(job.id, day)
+                                          }
+                                          title={
+                                            isOnSchedule
+                                              ? "Убрать из графика"
+                                              : "В график"
+                                          }
+                                          className="shrink-0 outline-none focus-visible:ring-1 focus-visible:ring-primary rounded-sm"
+                                        >
+                                          <JobBadge
+                                            job={job}
+                                            size="lg"
+                                            active={isOnSchedule}
+                                          />
+                                        </button>
+                                        <span className="text-[11px] tracking-[0.05em] text-muted-foreground w-[88px] truncate">
+                                          {job.label}
+                                        </span>
+                                        <NumericInput
+                                          autoFocus={idx === 0}
+                                          placeholder={placeholder}
+                                          value={editValues[job.id]}
+                                          onChange={(v) =>
+                                            setEditValues((prev) => ({
+                                              ...prev,
+                                              [job.id]: v,
+                                            }))
+                                          }
+                                          onSubmit={() => handleSave(day)}
+                                        />
+                                      </div>
+                                      {chips.length > 0 && (
+                                        <div className="pl-[124px]">
+                                          <ChipSuggestions
+                                            values={chips}
+                                            onPick={(v) =>
+                                              setEditValues((prev) => ({
+                                                ...prev,
+                                                [job.id]: String(v),
+                                              }))
+                                            }
+                                          />
+                                        </div>
+                                      )}
                                     </div>
                                   );
                                 })}
@@ -1978,12 +2957,12 @@ export default function Calendar() {
           </AnimatePresence>
         </Tile>
 
-        {/* Right column: total + per-job + weeks */}
+        {/* Right column: total + per-job + tabbed bottom */}
         <div
           className="grid gap-3 min-h-0"
           style={{ gridTemplateRows: "auto auto minmax(0, 1fr)" }}
         >
-          {/* Total tile (merged with stats) */}
+          {/* Total tile */}
           <Tile>
             <div className="px-4 pt-4 pb-3">
               <div className="flex items-center justify-between">
@@ -2011,7 +2990,6 @@ export default function Calendar() {
                 {monthDays.length.toString().padStart(2, "0")}] дней
               </div>
 
-              {/* Forecast */}
               {forecast > monthTotal && (
                 <div className="mt-2 flex items-baseline justify-between gap-2 text-[11px]">
                   <span className="uppercase tracking-[0.2em] text-muted-foreground/70 text-[9px]">
@@ -2061,6 +3039,17 @@ export default function Calendar() {
                   </div>
                 )}
               </div>
+
+              {/* Savings goal */}
+              <div className="mt-3 pt-3 border-t border-border">
+                <SavingsGoalEditor
+                  savingsGoal={savingsGoal}
+                  currency={currency}
+                  convert={convert}
+                  onSet={setSavingsGoal}
+                  onClear={clearSavingsGoal}
+                />
+              </div>
             </div>
             <div className="border-t border-border divide-y divide-border">
               <div className="flex items-center justify-between px-4 py-2">
@@ -2088,30 +3077,23 @@ export default function Calendar() {
               <TileLabel>по работам</TileLabel>
               <SchedulePicker
                 currentDate={currentDate}
+                jobs={jobs}
                 onApply={applyScheduleAnchor}
                 onClear={clearScheduleForJob}
               />
             </div>
             <ul className="divide-y divide-border">
-              {JOBS.map((job) => (
+              {jobs.map((job) => (
                 <li
                   key={job.id}
-                  className="flex items-center justify-between px-4 py-2"
+                  className="flex items-center justify-between px-4 py-2 gap-2"
                 >
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span
-                      className={cn(
-                        "shrink-0 w-4 h-4 inline-flex items-center justify-center rounded-sm text-[9px] font-bold uppercase",
-                        job.id === "ozon"
-                          ? "bg-foreground/80 text-background"
-                          : "border border-foreground/60 text-foreground/80",
-                      )}
-                    >
-                      {job.short}
-                    </span>
-                    <span className="text-[11px] truncate">{job.label}</span>
-                  </div>
-                  <span className="text-xs font-semibold tabular-nums">
+                  <JobEditor
+                    job={job}
+                    onSave={(cfg) => setJobConfig(job.id, cfg)}
+                    onReset={() => resetJobConfig(job.id)}
+                  />
+                  <span className="text-xs font-semibold tabular-nums shrink-0">
                     <MoneyTicker
                       value={perJobMonthTotal[job.id]}
                       currency={currency}
@@ -2122,57 +3104,132 @@ export default function Calendar() {
             </ul>
           </Tile>
 
-          {/* Weeks tile */}
+          {/* Tabbed bottom: weeks / forecast */}
           <Tile>
             <div className="px-4 py-2 border-b border-border shrink-0 flex items-center justify-between">
-              <TileLabel>недели</TileLabel>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setBottomTab("weeks")}
+                  className={cn(
+                    "text-[10px] font-medium uppercase tracking-[0.25em] transition-colors",
+                    bottomTab === "weeks"
+                      ? "text-foreground"
+                      : "text-muted-foreground/60 hover:text-muted-foreground",
+                  )}
+                >
+                  недели
+                </button>
+                <button
+                  onClick={() => setBottomTab("forecast")}
+                  className={cn(
+                    "text-[10px] font-medium uppercase tracking-[0.25em] transition-colors",
+                    bottomTab === "forecast"
+                      ? "text-foreground"
+                      : "text-muted-foreground/60 hover:text-muted-foreground",
+                  )}
+                >
+                  прогноз
+                </button>
+              </div>
               <span className="text-[10px] text-muted-foreground tabular-nums">
-                [{weeks.filter(w => w.some(d => isSameMonth(d, currentDate))).length.toString().padStart(2, "0")}]
+                {bottomTab === "weeks"
+                  ? `[${weeks.filter((w) => w.some((d) => isSameMonth(d, currentDate))).length.toString().padStart(2, "0")}]`
+                  : "+3 мес"}
               </span>
             </div>
-            <ul className="flex-1 overflow-auto divide-y divide-border">
-              {weeks.map((week, wi) => {
-                const monthDaysInWeek = week.filter((d) =>
-                  isSameMonth(d, currentDate),
-                );
-                if (monthDaysInWeek.length === 0) return null;
-                const weekTotal = getWeekTotal(week);
-                const first = monthDaysInWeek[0];
-                const last = monthDaysInWeek[monthDaysInWeek.length - 1];
-                return (
-                  <li
-                    key={wi}
-                    className="flex items-center justify-between px-4 py-2"
-                  >
-                    <div className="flex items-baseline gap-2">
-                      <span className="text-[10px] text-muted-foreground tabular-nums">
-                        w{(wi + 1).toString().padStart(2, "0")}
-                      </span>
-                      <span className="text-[11px] tabular-nums text-muted-foreground">
-                        {format(first, "dd")}—{format(last, "dd")}
-                      </span>
-                    </div>
-                    <span className="text-xs font-semibold tabular-nums">
-                      <MoneyTicker value={weekTotal} currency={currency} />
-                    </span>
+            <div className="flex-1 overflow-auto">
+              {bottomTab === "weeks" ? (
+                <ul className="divide-y divide-border">
+                  {weeks.map((week, wi) => {
+                    const monthDaysInWeek = week.filter((d) =>
+                      isSameMonth(d, currentDate),
+                    );
+                    if (monthDaysInWeek.length === 0) return null;
+                    const weekTotal = getWeekTotal(week);
+                    const first = monthDaysInWeek[0];
+                    const last = monthDaysInWeek[monthDaysInWeek.length - 1];
+                    return (
+                      <li
+                        key={wi}
+                        className="flex items-center justify-between px-4 py-2"
+                      >
+                        <div className="flex items-baseline gap-2">
+                          <span className="text-[10px] text-muted-foreground tabular-nums">
+                            w{(wi + 1).toString().padStart(2, "0")}
+                          </span>
+                          <span className="text-[11px] tabular-nums text-muted-foreground">
+                            {format(first, "dd")}—{format(last, "dd")}
+                          </span>
+                        </div>
+                        <span className="text-xs font-semibold tabular-nums">
+                          <MoneyTicker value={weekTotal} currency={currency} />
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : (
+                <ul className="divide-y divide-border">
+                  {cashflow.map((c) => {
+                    const mLabel = format(c.monthDate, "LLL", {
+                      locale: ru,
+                    }).toLowerCase();
+                    return (
+                      <li key={c.monthDate.toISOString()} className="px-4 py-2">
+                        <div className="flex items-baseline justify-between mb-0.5">
+                          <span className="text-[11px] uppercase tracking-[0.15em] text-muted-foreground">
+                            {mLabel}
+                          </span>
+                          <span className="text-xs font-semibold tabular-nums">
+                            {formatMoney(c.predicted, currency)}
+                          </span>
+                        </div>
+                        <div className="flex items-baseline justify-between text-[10px] tabular-nums text-muted-foreground/80">
+                          <span>
+                            −{formatMoney(c.obligations, currency)}
+                            {c.tax > 0 && ` · −${formatMoney(c.tax, currency)}`}
+                          </span>
+                          <span
+                            className={cn(
+                              "font-medium",
+                              c.net >= 0
+                                ? "text-foreground/80"
+                                : "text-destructive/80",
+                            )}
+                          >
+                            {c.net >= 0 ? "= " : "= −"}
+                            {formatMoney(Math.abs(c.net), currency)}
+                          </span>
+                        </div>
+                      </li>
+                    );
+                  })}
+                  <li className="px-4 py-2 text-[9px] text-muted-foreground/60 leading-snug">
+                    прогноз: средняя смена × дней в графике
                   </li>
-                );
-              })}
-            </ul>
+                </ul>
+              )}
+            </div>
           </Tile>
         </div>
 
         {/* Obligations column */}
         <ObligationsPanel
           obligations={obligations}
+          categories={categories}
           currency={currency}
           convert={convert}
           freeAmount={freeAmount}
+          taxRate={taxRate}
+          taxAmount={taxAmount}
+          taxDueLabel={taxDueLabel}
+          taxDueAmount={taxDueAmount}
           onAdd={addObligation}
           onUpdate={updateObligation}
           onRemove={removeObligation}
+          onAddCategory={addCategory}
+          onSetTaxRate={setTaxRate}
         />
-
       </div>
 
       <AnimatePresence>
@@ -2183,6 +3240,7 @@ export default function Calendar() {
             entries={entries}
             currency={currency}
             convert={convert}
+            jobs={jobs}
             onPickMonth={(date) => {
               setCurrentDate(startOfMonth(date));
               setYearViewOpen(false);
@@ -2191,6 +3249,8 @@ export default function Calendar() {
           />
         )}
       </AnimatePresence>
+
+      <ToastFlash message={toast} />
     </div>
   );
 }
