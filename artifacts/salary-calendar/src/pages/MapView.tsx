@@ -23,12 +23,16 @@ import {
 } from "@/lib/waves";
 import { searchAddress, reverseGeocode, type GeocodeResult } from "@/lib/geocode";
 import {
-  nearestNeighborRoute,
-  twoOptImprove,
+  optimizeRoute,
   makeMatrixDistFn,
 } from "@/lib/route-optimizer";
 import { useGeolocation } from "@/lib/geolocation";
-import { useRoute, useDistanceMatrix } from "@/lib/use-route";
+import { useRoute, useDistanceMatrix, useRoutingProfile } from "@/lib/use-route";
+import {
+  PROFILE_LABELS,
+  setRoutingProfile,
+  type RouteProfile,
+} from "@/lib/routing";
 import DeliveryMap from "@/components/DeliveryMap";
 import DriveMode from "@/components/DriveMode";
 import { cn } from "@/lib/utils";
@@ -141,8 +145,10 @@ export default function MapView() {
     const dist = matrix.durations
       ? makeMatrixDistFn(matrix.ids, matrix.durations)
       : undefined;
-    const ordered = nearestNeighborRoute(start, pending, dist);
-    const refined = twoOptImprove(start, ordered, 50, dist);
+    // Full optimizer: nearest-neighbor seed → 2-opt → or-opt → far-first
+    // orientation. `dist` is the real OSRM duration matrix when loaded,
+    // haversine fallback otherwise.
+    const refined = optimizeRoute(start, pending, dist, { farFirst: true });
     const newOrder = refined.map((p) => p.id);
     const curOrder = pending.map((p) => p.id);
     if (newOrder.join("|") !== curOrder.join("|")) {
@@ -341,6 +347,8 @@ export default function MapView() {
             <div className="w-px h-5 bg-border mx-1" />
             <JobFilter jobs={salary.jobs} filter={filterJob} setFilter={setFilterJob} />
             <div className="w-px h-5 bg-border mx-1" />
+            <ProfileChip />
+            <div className="w-px h-5 bg-border mx-1" />
             <button
               onClick={() => setShowRoute((s) => !s)}
               className={cn(
@@ -523,6 +531,48 @@ export default function MapView() {
         />
       )}
     </div>
+  );
+}
+
+const PROFILE_KEY = "salary-calendar:routing-profile:v1";
+const PROFILE_GLYPH: Record<RouteProfile, string> = {
+  bike: "🚲",
+  foot: "🚶",
+  car: "🚗",
+};
+const PROFILE_ORDER: RouteProfile[] = ["bike", "foot", "car"];
+
+function ProfileChip() {
+  const profile = useRoutingProfile();
+  // One-time hydration from localStorage so the user's last choice survives
+  // reloads. We do this in a layout-safe effect so the first render always
+  // matches SSR-equivalent state.
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(PROFILE_KEY);
+      if (raw === "bike" || raw === "foot" || raw === "car") {
+        setRoutingProfile(raw);
+      }
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const cycle = () => {
+    const i = PROFILE_ORDER.indexOf(profile);
+    const next = PROFILE_ORDER[(i + 1) % PROFILE_ORDER.length];
+    setRoutingProfile(next);
+    try {
+      localStorage.setItem(PROFILE_KEY, next);
+    } catch {}
+  };
+  return (
+    <button
+      onClick={cycle}
+      className="h-7 px-2.5 text-[10px] font-medium uppercase tracking-[0.18em] rounded-md border border-border hover:bg-muted transition-colors flex items-center gap-1.5"
+      title={`Профиль маршрута: ${PROFILE_LABELS[profile]} — нажми чтобы переключить`}
+    >
+      <span>{PROFILE_GLYPH[profile]}</span>
+      <span className="text-muted-foreground">{PROFILE_LABELS[profile]}</span>
+    </button>
   );
 }
 

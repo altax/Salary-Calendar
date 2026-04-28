@@ -32,7 +32,9 @@ All localStorage keys are prefixed `salary-calendar:`. A one-time reset (`salary
 - Tiles: CartoDB Dark Matter / Positron (no API key)
 - Tap on map → add point dialog (delivery with amount, or pending order)
 - Address search via Nominatim (SPB viewbox)
-- Route optimizer: nearest-neighbor seed + 2-opt refinement (`lib/route-optimizer.ts`), uses real-road duration matrix when available
+- Route optimizer (`lib/route-optimizer.ts`): nearest-neighbor seed → closed-tour 2-opt → or-opt (1/2/3-stop relocation) → far-first orientation. Uses real OSRM duration matrix when available, haversine fallback otherwise. The closed-tour cost includes the return-to-depot leg, so 2-opt swaps that shorten the closing edge are taken. Far-first orientation reverses the tour if the last stop is farther from depot than the first — total km is identical but starting with the farthest stop wins on battery use, fatigue, abandonment risk, and final return distance.
+- Routing profile (`lib/routing.ts`): runtime-switchable `bike` / `foot` / `car`. Bike & foot use `routing.openstreetmap.de/routed-{bike,foot}` (allows pedestrian shortcuts and cycle paths — important for e-bike couriers). Car uses `router.project-osrm.org`. `useRoute` and `useDistanceMatrix` re-key on profile and refetch on switch. Selection persisted in `localStorage` under `salary-calendar:routing-profile:v1` and restored in `main.tsx` before the first fetch. UI: cycling chip in MapView header (🚲 / 🚶 / 🚗).
+- Service worker `ROUTING_HOST_RE` covers both `router.project-osrm.org` and `routing.openstreetmap.de`, so all three profiles work offline once cached.
 - Day-modal opens from a calendar day popover when that day has deliveries
 
 ## Turn-by-turn navigator

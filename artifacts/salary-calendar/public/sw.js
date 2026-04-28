@@ -5,13 +5,14 @@
 //  - App shell (HTML/JS/CSS) — network-first; falls back to cache when offline
 // Bumping VERSION purges old caches.
 
-const VERSION = "v3";
+const VERSION = "v4";
 const TILES_CACHE = `tiles-${VERSION}`;
 const ROUTING_CACHE = `routing-${VERSION}`;
 const APP_CACHE = `app-${VERSION}`;
 
 const TILE_HOST_RE = /basemaps\.cartocdn\.com|tile\.openstreetmap\.org/;
-const ROUTING_HOST_RE = /router\.project-osrm\.org|nominatim\.openstreetmap\.org/;
+// Both the old car-only OSRM demo and the bike/foot demos at openstreetmap.de.
+const ROUTING_HOST_RE = /router\.project-osrm\.org|routing\.openstreetmap\.de|nominatim\.openstreetmap\.org/;
 
 self.addEventListener("install", (event) => {
   // Activate immediately so new worker takes over without manual reload.

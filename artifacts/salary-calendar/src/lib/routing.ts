@@ -73,10 +73,51 @@ export interface RoutingProvider {
   getMatrix(points: LatLng[]): Promise<RouteMatrix>;
 }
 
-const DEFAULT_OSRM_BASE = "https://router.project-osrm.org";
+// Routing profiles. The app is for an e-bike courier in St. Petersburg, so
+// `bike` is the default — it routes via cycleways and many footways. `foot`
+// allows aggressive shortcuts through pedestrian zones, plazas, underpasses
+// (slower estimated speed but often shorter distance). `car` is a fallback
+// for motorized transport.
+export type RouteProfile = "bike" | "foot" | "car";
+
+export const PROFILE_LABELS: Record<RouteProfile, string> = {
+  bike: "велосипед",
+  foot: "пешком",
+  car: "машина",
+};
+
+// Public OSRM-compatible servers per profile.
+//   bike → routing.openstreetmap.de/routed-bike, profile name `bike`
+//   foot → routing.openstreetmap.de/routed-foot, profile name `foot`
+//   car  → router.project-osrm.org,            profile name `driving`
+type ProfileEndpoint = { base: string; pathProfile: string };
+
+const PROFILE_ENDPOINTS: Record<RouteProfile, ProfileEndpoint> = {
+  bike: { base: "https://routing.openstreetmap.de/routed-bike", pathProfile: "bike" },
+  foot: { base: "https://routing.openstreetmap.de/routed-foot", pathProfile: "foot" },
+  car: { base: "https://router.project-osrm.org", pathProfile: "driving" },
+};
+
+// Average straight-line speed used when routing fails. Scales with profile so
+// the offline fallback ETA isn't laughably wrong.
+const PROFILE_FALLBACK_SPEED_MPS: Record<RouteProfile, number> = {
+  bike: 6, // ~22 km/h
+  foot: 1.4, // ~5 km/h
+  car: 11, // ~40 km/h
+};
 
 export class OsrmProvider implements RoutingProvider {
-  constructor(private readonly base: string = DEFAULT_OSRM_BASE) {}
+  constructor(
+    private readonly profile: RouteProfile = "bike",
+    private readonly overrideBase?: string,
+  ) {}
+
+  private endpoint(): ProfileEndpoint {
+    if (this.overrideBase) {
+      return { base: this.overrideBase, pathProfile: PROFILE_ENDPOINTS[this.profile].pathProfile };
+    }
+    return PROFILE_ENDPOINTS[this.profile];
+  }
 
   private encodeCoords(points: LatLng[]): string {
     return points.map((p) => `${p.lng.toFixed(6)},${p.lat.toFixed(6)}`).join(";");
@@ -85,7 +126,10 @@ export class OsrmProvider implements RoutingProvider {
   async getRoute(points: LatLng[]): Promise<RouteResult> {
     if (points.length < 2) throw new Error("routing: need at least 2 points");
     const coords = this.encodeCoords(points);
-    const url = `${this.base}/route/v1/driving/${coords}?overview=full&steps=true&geometries=geojson&annotations=false&continue_straight=true`;
+    const { base, pathProfile } = this.endpoint();
+    // continue_straight=false is friendlier for bikes/pedestrians (they can
+    // turn around easily, no need to force a long detour).
+    const url = `${base}/route/v1/${pathProfile}/${coords}?overview=full&steps=true&geometries=geojson&annotations=false&continue_straight=false`;
     try {
       const res = await fetch(url);
       if (!res.ok) throw new Error(`routing: ${res.status} ${res.statusText}`);
@@ -112,7 +156,7 @@ export class OsrmProvider implements RoutingProvider {
     } catch (err) {
       // Offline / SW returned 599 / DNS / etc. Build a straight-line fallback
       // so DriveMode still has something to show and announce.
-      return buildStraightLineRoute(points);
+      return buildStraightLineRoute(points, PROFILE_FALLBACK_SPEED_MPS[this.profile]);
     }
   }
 
@@ -123,7 +167,8 @@ export class OsrmProvider implements RoutingProvider {
       return { distances: zero, durations: zero };
     }
     const coords = this.encodeCoords(points);
-    const url = `${this.base}/table/v1/driving/${coords}?annotations=distance,duration`;
+    const { base, pathProfile } = this.endpoint();
+    const url = `${base}/table/v1/${pathProfile}/${coords}?annotations=distance,duration`;
     try {
       const res = await fetch(url);
       if (!res.ok) throw new Error(`matrix: ${res.status} ${res.statusText}`);
@@ -134,13 +179,10 @@ export class OsrmProvider implements RoutingProvider {
         durations: json.durations ?? [],
       };
     } catch (err) {
-      return buildStraightLineMatrix(points);
+      return buildStraightLineMatrix(points, PROFILE_FALLBACK_SPEED_MPS[this.profile]);
     }
   }
 }
-
-// Average urban driving speed used when we have no real routing data.
-const STRAIGHT_LINE_SPEED_MPS = 11; // ~40 km/h
 
 function haversineMeters(a: LatLng, b: LatLng): number {
   const R = 6371000;
@@ -155,7 +197,10 @@ function haversineMeters(a: LatLng, b: LatLng): number {
   return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
 }
 
-export function buildStraightLineRoute(points: LatLng[]): RouteResult {
+export function buildStraightLineRoute(
+  points: LatLng[],
+  speedMps: number = 6,
+): RouteResult {
   const geometry: [number, number][] = points.map((p) => [p.lat, p.lng]);
   const legs: RouteLeg[] = [];
   let totalDist = 0;
@@ -164,7 +209,7 @@ export function buildStraightLineRoute(points: LatLng[]): RouteResult {
     const a = points[i - 1];
     const b = points[i];
     const d = haversineMeters(a, b);
-    const t = d / STRAIGHT_LINE_SPEED_MPS;
+    const t = d / speedMps;
     totalDist += d;
     totalDur += t;
     const isLast = i === points.length - 1;
@@ -207,7 +252,10 @@ export function buildStraightLineRoute(points: LatLng[]): RouteResult {
   };
 }
 
-function buildStraightLineMatrix(points: LatLng[]): RouteMatrix {
+function buildStraightLineMatrix(
+  points: LatLng[],
+  speedMps: number = 6,
+): RouteMatrix {
   const n = points.length;
   const distances: number[][] = Array.from({ length: n }, () => new Array(n).fill(0));
   const durations: number[][] = Array.from({ length: n }, () => new Array(n).fill(0));
@@ -216,7 +264,7 @@ function buildStraightLineMatrix(points: LatLng[]): RouteMatrix {
       if (i === j) continue;
       const d = haversineMeters(points[i], points[j]);
       distances[i][j] = d;
-      durations[i][j] = d / STRAIGHT_LINE_SPEED_MPS;
+      durations[i][j] = d / speedMps;
     }
   }
   return { distances, durations };
@@ -247,16 +295,41 @@ function normalizeStep(raw: any): RouteStep {
   };
 }
 
-let defaultProvider: RoutingProvider | null = null;
-export function getRoutingProvider(): RoutingProvider {
-  if (!defaultProvider) {
-    const base =
-      (typeof import.meta !== "undefined" &&
-        (import.meta as any).env?.VITE_OSRM_BASE) ||
-      DEFAULT_OSRM_BASE;
-    defaultProvider = new OsrmProvider(base);
+// Active routing profile is mutable at runtime so the user can switch
+// bike/foot/car from the UI. Listeners (useRoute / useDistanceMatrix) re-run
+// when this changes via `subscribeRoutingProfile`.
+let activeProfile: RouteProfile = "bike";
+const profileListeners = new Set<(p: RouteProfile) => void>();
+const providerCache = new Map<RouteProfile, RoutingProvider>();
+
+export function getRoutingProfile(): RouteProfile {
+  return activeProfile;
+}
+
+export function setRoutingProfile(p: RouteProfile): void {
+  if (p === activeProfile) return;
+  activeProfile = p;
+  for (const fn of profileListeners) fn(p);
+}
+
+export function subscribeRoutingProfile(
+  fn: (p: RouteProfile) => void,
+): () => void {
+  profileListeners.add(fn);
+  return () => profileListeners.delete(fn);
+}
+
+export function getRoutingProvider(profile: RouteProfile = activeProfile): RoutingProvider {
+  let cached = providerCache.get(profile);
+  if (!cached) {
+    const overrideBase =
+      typeof import.meta !== "undefined"
+        ? (import.meta as any).env?.[`VITE_OSRM_${profile.toUpperCase()}_BASE`]
+        : undefined;
+    cached = new OsrmProvider(profile, overrideBase);
+    providerCache.set(profile, cached);
   }
-  return defaultProvider;
+  return cached;
 }
 
 export function flattenSteps(route: RouteResult): RouteStep[] {

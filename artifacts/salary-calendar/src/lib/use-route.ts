@@ -1,5 +1,20 @@
 import { useEffect, useRef, useState } from "react";
-import { getRoutingProvider, type LatLng, type RouteResult } from "@/lib/routing";
+import {
+  getRoutingProfile,
+  getRoutingProvider,
+  subscribeRoutingProfile,
+  type LatLng,
+  type RouteProfile,
+  type RouteResult,
+} from "@/lib/routing";
+
+// React-hook view of the active routing profile. Components that use the
+// profile reactively (re-fetch on switch) read from this.
+export function useRoutingProfile(): RouteProfile {
+  const [p, setP] = useState<RouteProfile>(() => getRoutingProfile());
+  useEffect(() => subscribeRoutingProfile(setP), []);
+  return p;
+}
 
 export type RouteState = {
   route: RouteResult | null;
@@ -12,6 +27,7 @@ function pointsKey(points: LatLng[]): string {
 }
 
 export function useRoute(points: LatLng[] | null): RouteState {
+  const profile = useRoutingProfile();
   const [state, setState] = useState<RouteState>({
     route: null,
     loading: false,
@@ -26,12 +42,12 @@ export function useRoute(points: LatLng[] | null): RouteState {
       setState({ route: null, loading: false, error: null });
       return;
     }
-    const key = pointsKey(points);
+    const key = `${profile}|${pointsKey(points)}`;
     if (key === lastKey.current) return;
     lastKey.current = key;
     const myReq = ++reqId.current;
     setState((s) => ({ route: s.route, loading: true, error: null }));
-    getRoutingProvider()
+    getRoutingProvider(profile)
       .getRoute(points)
       .then((r) => {
         if (myReq !== reqId.current) return;
@@ -41,7 +57,7 @@ export function useRoute(points: LatLng[] | null): RouteState {
         if (myReq !== reqId.current) return;
         setState({ route: null, loading: false, error: e.message });
       });
-  }, [points ? pointsKey(points) : null]);
+  }, [profile, points ? pointsKey(points) : null]);
 
   return state;
 }
@@ -57,6 +73,7 @@ export type MatrixState = {
 export function useDistanceMatrix(
   points: ({ id: string; lat: number; lng: number })[] | null,
 ): MatrixState {
+  const profile = useRoutingProfile();
   const [state, setState] = useState<MatrixState>({
     ids: [],
     durations: null,
@@ -73,12 +90,12 @@ export function useDistanceMatrix(
       setState({ ids: [], durations: null, distances: null, loading: false, error: null });
       return;
     }
-    const key = points.map((p) => `${p.id}:${p.lat.toFixed(5)},${p.lng.toFixed(5)}`).join("|");
+    const key = `${profile}|${points.map((p) => `${p.id}:${p.lat.toFixed(5)},${p.lng.toFixed(5)}`).join("|")}`;
     if (key === lastKey.current) return;
     lastKey.current = key;
     const myReq = ++reqId.current;
     setState((s) => ({ ...s, loading: true, error: null }));
-    getRoutingProvider()
+    getRoutingProvider(profile)
       .getMatrix(points.map((p) => ({ lat: p.lat, lng: p.lng })))
       .then((m) => {
         if (myReq !== reqId.current) return;
@@ -94,7 +111,7 @@ export function useDistanceMatrix(
         if (myReq !== reqId.current) return;
         setState({ ids: [], durations: null, distances: null, loading: false, error: e.message });
       });
-  }, [points ? points.map((p) => `${p.id}:${p.lat.toFixed(5)},${p.lng.toFixed(5)}`).join("|") : null]);
+  }, [profile, points ? points.map((p) => `${p.id}:${p.lat.toFixed(5)},${p.lng.toFixed(5)}`).join("|") : null]);
 
   return state;
 }
