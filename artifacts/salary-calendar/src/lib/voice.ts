@@ -288,6 +288,10 @@ export function announceRouteBuilt(
   );
 }
 
+export function announceOfflineFallbackRoute(voice: VoiceController): void {
+  voice.speak("Маршрут построен по прямой — нет связи.");
+}
+
 export function announceStopDelivered(
   voice: VoiceController,
   remaining: number,

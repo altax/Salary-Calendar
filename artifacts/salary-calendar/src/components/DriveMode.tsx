@@ -22,6 +22,7 @@ import {
   maneuverArrow,
   maneuverInstruction,
   announceRouteBuilt,
+  announceOfflineFallbackRoute,
   announceStopDelivered,
   announceReturningToDepot,
   announceShiftFinished,
@@ -229,18 +230,25 @@ export default function DriveMode({
     if (lastBuiltRouteIdRef.current === id) return;
     lastBuiltRouteIdRef.current = id;
     if (routeRequest.kind === "delivery" && pending.length > 0) {
-      announceRouteBuilt(
-        voiceRef.current,
-        route.route.distance / 1000,
-        route.route.duration,
-        pending.length,
-      );
+      if (route.route.source === "straight") {
+        announceOfflineFallbackRoute(voiceRef.current);
+      } else {
+        announceRouteBuilt(
+          voiceRef.current,
+          route.route.distance / 1000,
+          route.route.duration,
+          pending.length,
+        );
+      }
       onSaveDeliveryRoute?.(
         route.route.geometry,
         route.route.distance,
         route.route.duration,
       );
     } else if (routeRequest.kind === "return") {
+      if (route.route.source === "straight") {
+        announceOfflineFallbackRoute(voiceRef.current);
+      }
       onSaveReturnRoute?.(
         route.route.geometry,
         route.route.distance,

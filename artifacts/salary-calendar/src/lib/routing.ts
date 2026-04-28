@@ -58,6 +58,9 @@ export type RouteResult = {
   duration: number;
   geometry: [number, number][];
   legs: RouteLeg[];
+  // "osrm" — real route from OSRM (live or SW cache).
+  // "straight" — offline straight-line haversine fallback.
+  source?: "osrm" | "straight";
 };
 
 export type RouteMatrix = {
@@ -83,27 +86,34 @@ export class OsrmProvider implements RoutingProvider {
     if (points.length < 2) throw new Error("routing: need at least 2 points");
     const coords = this.encodeCoords(points);
     const url = `${this.base}/route/v1/driving/${coords}?overview=full&steps=true&geometries=geojson&annotations=false&continue_straight=true`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`routing: ${res.status} ${res.statusText}`);
-    const json = await res.json();
-    if (json.code !== "Ok" || !json.routes?.length) {
-      throw new Error(`routing: ${json.code || "no route"}`);
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`routing: ${res.status} ${res.statusText}`);
+      const json = await res.json();
+      if (json.code !== "Ok" || !json.routes?.length) {
+        throw new Error(`routing: ${json.code || "no route"}`);
+      }
+      const r = json.routes[0];
+      const geometry: [number, number][] = (r.geometry?.coordinates ?? []).map(
+        (c: [number, number]) => [c[1], c[0]] as [number, number],
+      );
+      const legs: RouteLeg[] = (r.legs ?? []).map((leg: any) => ({
+        distance: leg.distance ?? 0,
+        duration: leg.duration ?? 0,
+        steps: (leg.steps ?? []).map((s: any) => normalizeStep(s)),
+      }));
+      return {
+        distance: r.distance ?? 0,
+        duration: r.duration ?? 0,
+        geometry,
+        legs,
+        source: "osrm",
+      };
+    } catch (err) {
+      // Offline / SW returned 599 / DNS / etc. Build a straight-line fallback
+      // so DriveMode still has something to show and announce.
+      return buildStraightLineRoute(points);
     }
-    const r = json.routes[0];
-    const geometry: [number, number][] = (r.geometry?.coordinates ?? []).map(
-      (c: [number, number]) => [c[1], c[0]] as [number, number],
-    );
-    const legs: RouteLeg[] = (r.legs ?? []).map((leg: any) => ({
-      distance: leg.distance ?? 0,
-      duration: leg.duration ?? 0,
-      steps: (leg.steps ?? []).map((s: any) => normalizeStep(s)),
-    }));
-    return {
-      distance: r.distance ?? 0,
-      duration: r.duration ?? 0,
-      geometry,
-      legs,
-    };
   }
 
   async getMatrix(points: LatLng[]): Promise<RouteMatrix> {
@@ -114,15 +124,102 @@ export class OsrmProvider implements RoutingProvider {
     }
     const coords = this.encodeCoords(points);
     const url = `${this.base}/table/v1/driving/${coords}?annotations=distance,duration`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`matrix: ${res.status} ${res.statusText}`);
-    const json = await res.json();
-    if (json.code !== "Ok") throw new Error(`matrix: ${json.code}`);
-    return {
-      distances: json.distances ?? [],
-      durations: json.durations ?? [],
-    };
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`matrix: ${res.status} ${res.statusText}`);
+      const json = await res.json();
+      if (json.code !== "Ok") throw new Error(`matrix: ${json.code}`);
+      return {
+        distances: json.distances ?? [],
+        durations: json.durations ?? [],
+      };
+    } catch (err) {
+      return buildStraightLineMatrix(points);
+    }
   }
+}
+
+// Average urban driving speed used when we have no real routing data.
+const STRAIGHT_LINE_SPEED_MPS = 11; // ~40 km/h
+
+function haversineMeters(a: LatLng, b: LatLng): number {
+  const R = 6371000;
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const lat1 = toRad(a.lat);
+  const lat2 = toRad(b.lat);
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+export function buildStraightLineRoute(points: LatLng[]): RouteResult {
+  const geometry: [number, number][] = points.map((p) => [p.lat, p.lng]);
+  const legs: RouteLeg[] = [];
+  let totalDist = 0;
+  let totalDur = 0;
+  for (let i = 1; i < points.length; i += 1) {
+    const a = points[i - 1];
+    const b = points[i];
+    const d = haversineMeters(a, b);
+    const t = d / STRAIGHT_LINE_SPEED_MPS;
+    totalDist += d;
+    totalDur += t;
+    const isLast = i === points.length - 1;
+    legs.push({
+      distance: d,
+      duration: t,
+      steps: [
+        {
+          distance: d,
+          duration: t,
+          geometry: [
+            [a.lat, a.lng],
+            [b.lat, b.lng],
+          ],
+          name: "по прямой",
+          maneuver: {
+            type: i === 1 ? "depart" : "continue",
+            location: [a.lat, a.lng],
+          },
+        },
+        {
+          distance: 0,
+          duration: 0,
+          geometry: [[b.lat, b.lng]],
+          name: "",
+          maneuver: {
+            type: isLast ? "arrive" : "continue",
+            location: [b.lat, b.lng],
+          },
+        },
+      ],
+    });
+  }
+  return {
+    distance: totalDist,
+    duration: totalDur,
+    geometry,
+    legs,
+    source: "straight",
+  };
+}
+
+function buildStraightLineMatrix(points: LatLng[]): RouteMatrix {
+  const n = points.length;
+  const distances: number[][] = Array.from({ length: n }, () => new Array(n).fill(0));
+  const durations: number[][] = Array.from({ length: n }, () => new Array(n).fill(0));
+  for (let i = 0; i < n; i += 1) {
+    for (let j = 0; j < n; j += 1) {
+      if (i === j) continue;
+      const d = haversineMeters(points[i], points[j]);
+      distances[i][j] = d;
+      durations[i][j] = d / STRAIGHT_LINE_SPEED_MPS;
+    }
+  }
+  return { distances, durations };
 }
 
 function normalizeStep(raw: any): RouteStep {

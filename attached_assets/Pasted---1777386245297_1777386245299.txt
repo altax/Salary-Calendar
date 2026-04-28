@@ -1,0 +1,34 @@
+мы работали над:нужно сделать возможность скачать карту и строить маршруты ОФФЛАЙН на случай если интернет не будет доступен. так же нужно завершенный маршрут комповать в одну вкладку, потому что я буду приезжать обратно на слад и снова набирать заказы. То есть вот каждая новая волна заказов долна быть скомпанована в свои вкладки, чтобы было не всю в кучу. И еще нужно будет убрать линии пройденного маршрута после его завершения и отображать их только когда ты открыл эту самую вкладку этой волны заказов.
+
+наш план:
+
+Objective
+Group orders into waves with tabs, hide finished wave polylines on main map, support offline maps & cached OSRM routing.
+
+Tasks
+T001: Wave store
+Create lib/waves.ts with Wave, WaveStop types and useWavesStore hook (localStorage-persisted).
+Migrate existing pending orders into a new active wave on first load.
+Provide methods: ensureActive, addStop, updateStop, completeStop, skipStop, removeStop, reorderStops, saveRoute, finishWave, reopenWave, deleteWave, selectWave.
+T002: MapView integration
+Replace deliveriesStore.pending calls with wavesStore.activePending etc.
+Still write to deliveriesStore.addDelivery on completion (calendar history).
+Add WaveTabs UI: active wave + finished waves list, finish / new wave / reopen actions.
+Render polylines only for the visible wave (active by default; user can switch to a finished wave to inspect).
+After wave finishes, polyline disappears unless user opens that wave's tab.
+T003: DriveMode integration
+Pass active wave's pending stops; on last delivery + depot arrival → call onFinishWave.
+Save the built route geometry + distance + duration into the wave when route is fetched.
+T004: Offline maps
+Add Service Worker public/sw.js: cache-first for OSM tiles + OSRM responses; bypass for app shell.
+Register SW from src/main.tsx.
+Add a "Скачать карту" button (in a settings-like place or wave tabs panel) that pre-fetches SPB tiles range (zoom 12-16) + the active wave's OSRM route.
+Show offline indicator when !navigator.onLine.
+T005: Offline routing fallback
+Modify routing.ts to retry with cached SW response automatically (SW handles it).
+When fetch fails AND no cache, fall back to straight-line haversine "route" with synthetic single-leg geometry and distance, plus voice note "Маршрут построен по прямой — нет связи".
+T006: Cleanup & docs
+Update replit.md with new architecture.
+Typecheck.
+
+Проверь на чем мы прервались и продолжи с этого момента
