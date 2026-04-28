@@ -11,7 +11,59 @@ const TIER_RADIUS_M: Record<VoiceTier, number> = {
   rerouted: 0,
 };
 
+// =====================================================================
+// Voice selection
+// =====================================================================
+// Browser TTS quality varies wildly. Default eSpeak voices ("Russian") sound
+// like a 1990s answering machine. We prefer high-quality cloud / OS voices in
+// this order:
+//   1. Explicit user choice (saved by name in localStorage)
+//   2. Google русский (Chrome desktop / Android)
+//   3. Microsoft Irina/Pavel/Daria/Dmitry (Windows / Edge)
+//   4. Yandex (rare, but very good)
+//   5. Apple "Yuri" / "Milena" (macOS / iOS)
+//   6. anything ru-* that does NOT have "espeak" in the name
+//   7. anything ru-*
+// The cached pick is invalidated whenever the OS voice list changes.
+
+const VOICE_PREF_KEY = "salary-calendar:voice:name:v1";
+
+function loadPreferredName(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.localStorage.getItem(VOICE_PREF_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function setPreferredVoiceName(name: string | null): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (name) window.localStorage.setItem(VOICE_PREF_KEY, name);
+    else window.localStorage.removeItem(VOICE_PREF_KEY);
+  } catch {}
+  cachedRuVoice = undefined;
+}
+
 let cachedRuVoice: SpeechSynthesisVoice | null | undefined;
+
+function isRu(v: SpeechSynthesisVoice): boolean {
+  return v.lang === "ru-RU" || (v.lang ?? "").toLowerCase().startsWith("ru");
+}
+
+function scoreVoice(v: SpeechSynthesisVoice): number {
+  const name = (v.name ?? "").toLowerCase();
+  // Higher = better.
+  if (name.includes("espeak")) return 1;
+  if (name.includes("google")) return 100;
+  if (name.includes("microsoft") && (name.includes("natural") || name.includes("neural"))) return 95;
+  if (name.includes("microsoft")) return 80;
+  if (name.includes("yandex")) return 90;
+  if (name.includes("milena") || name.includes("yuri") || name.includes("katya") || name.includes("дарья")) return 70;
+  if (name.includes("siri")) return 60;
+  return 30;
+}
 
 function pickRuVoice(): SpeechSynthesisVoice | null {
   if (cachedRuVoice !== undefined) return cachedRuVoice;
@@ -19,13 +71,27 @@ function pickRuVoice(): SpeechSynthesisVoice | null {
     cachedRuVoice = null;
     return null;
   }
-  const voices = window.speechSynthesis.getVoices();
-  const ru =
-    voices.find((v) => v.lang === "ru-RU") ||
-    voices.find((v) => v.lang?.toLowerCase().startsWith("ru")) ||
-    null;
-  cachedRuVoice = ru;
-  return ru;
+  const voices = window.speechSynthesis.getVoices().filter(isRu);
+  if (voices.length === 0) {
+    cachedRuVoice = null;
+    return null;
+  }
+  const preferred = loadPreferredName();
+  if (preferred) {
+    const exact = voices.find((v) => v.name === preferred);
+    if (exact) {
+      cachedRuVoice = exact;
+      return exact;
+    }
+  }
+  voices.sort((a, b) => scoreVoice(b) - scoreVoice(a));
+  cachedRuVoice = voices[0];
+  return voices[0];
+}
+
+export function listRuVoices(): SpeechSynthesisVoice[] {
+  if (typeof window === "undefined" || !("speechSynthesis" in window)) return [];
+  return window.speechSynthesis.getVoices().filter(isRu);
 }
 
 if (typeof window !== "undefined" && "speechSynthesis" in window) {
@@ -54,11 +120,13 @@ export function createVoiceController(initialMuted = false): VoiceController {
       try {
         synth.cancel();
         const u = new SpeechSynthesisUtterance(text);
-        u.lang = "ru-RU";
-        u.rate = 1.0;
+        const v = pickRuVoice();
+        u.lang = v?.lang || "ru-RU";
+        // Slightly slower than default — most Russian TTS engines are too fast
+        // and slur word endings, which is what makes them sound "robot-y".
+        u.rate = 0.95;
         u.pitch = 1.0;
         u.volume = 1.0;
-        const v = pickRuVoice();
         if (v) u.voice = v;
         synth.speak(u);
       } catch {}
@@ -81,6 +149,37 @@ export function createVoiceController(initialMuted = false): VoiceController {
     },
   };
 }
+
+// =====================================================================
+// Russian pluralization
+// =====================================================================
+// Pick the right grammatical form for a count. Russian has three forms:
+//   one  → 1, 21, 31, …  (but NOT 11)
+//   few  → 2..4, 22..24, …  (but NOT 12..14)
+//   many → 0, 5..20, 25..30, …
+// Example: pluralRu(n, ["точка", "точки", "точек"]).
+export function pluralRu(
+  n: number,
+  forms: [one: string, few: string, many: string],
+): string {
+  const abs = Math.abs(Math.trunc(n));
+  const mod10 = abs % 10;
+  const mod100 = abs % 100;
+  if (mod100 >= 11 && mod100 <= 14) return forms[2];
+  if (mod10 === 1) return forms[0];
+  if (mod10 >= 2 && mod10 <= 4) return forms[1];
+  return forms[2];
+}
+
+const TOCHKA: [string, string, string] = ["точка", "точки", "точек"];
+const MINUTA: [string, string, string] = ["минута", "минуты", "минут"];
+const MINUTU_ACC: [string, string, string] = ["минуту", "минуты", "минут"]; // accusative for "около"
+const KILOMETR: [string, string, string] = ["километр", "километра", "километров"];
+const METR: [string, string, string] = ["метр", "метра", "метров"];
+
+// =====================================================================
+// Maneuver vocabulary
+// =====================================================================
 
 const MODIFIER_RU: Record<string, string> = {
   left: "налево",
@@ -178,11 +277,21 @@ export function formatDistanceRu(m: number): string {
   if (m < 50) return "сейчас";
   if (m < 1000) {
     const rounded = Math.round(m / 10) * 10;
-    return `через ${rounded} метров`;
+    return `через ${rounded} ${pluralRu(rounded, METR)}`;
   }
   const km = m / 1000;
-  if (km < 10) return `через ${km.toFixed(1).replace(".", ",")} километра`;
-  return `через ${Math.round(km)} километров`;
+  if (km < 10) {
+    // "через 1,5 километра", "через 2,3 километра", "через 5,0 километров"
+    const rounded = Math.round(km * 10) / 10;
+    const intPart = Math.trunc(rounded);
+    const word =
+      Math.abs(rounded - intPart) > 0.05
+        ? KILOMETR[1] // fractional → "километра"
+        : pluralRu(intPart, KILOMETR);
+    return `через ${rounded.toFixed(1).replace(".", ",")} ${word}`;
+  }
+  const whole = Math.round(km);
+  return `через ${whole} ${pluralRu(whole, KILOMETR)}`;
 }
 
 export function buildVoicePrompt(
@@ -264,9 +373,36 @@ export class StopAnnouncer {
     }
     if (distanceM <= 400 && !this.announcedFar.has(stopId)) {
       this.announcedFar.add(stopId);
-      voice.speak(`${label} — через ${Math.round(distanceM / 10) * 10} метров.`);
+      const m = Math.round(distanceM / 10) * 10;
+      voice.speak(`${label} — через ${m} ${pluralRu(m, METR)}.`);
     }
   }
+}
+
+function kmPhrase(totalKm: number): string {
+  if (totalKm < 1) {
+    const m = Math.round(totalKm * 1000);
+    return `${m} ${pluralRu(m, METR)}`;
+  }
+  const rounded = Math.round(totalKm * 10) / 10;
+  const intPart = Math.trunc(rounded);
+  const word =
+    Math.abs(rounded - intPart) > 0.05
+      ? KILOMETR[1]
+      : pluralRu(intPart, KILOMETR);
+  return `${rounded.toFixed(1).replace(".", ",")} ${word}`;
+}
+
+function minPhrase(totalSec: number): string {
+  const m = Math.max(1, Math.round(totalSec / 60));
+  // "около" takes accusative — and for 1 it's "около минуты" (genitive sg),
+  // for 2..4 "около двух/трёх/четырёх минут", for 5+ "около пяти минут".
+  // The pattern that reads correctly for all: "около N минута/минуты/минут"
+  // is `pluralRu(m, MINUTU_ACC)` which gives минуту/минуты/минут.
+  // BUT for the single-minute case the natural Russian reading is
+  // "около одной минуты". We special-case 1.
+  if (m === 1) return "около минуты";
+  return `около ${m} ${pluralRu(m, MINUTU_ACC)}`;
 }
 
 export function announceRouteBuilt(
@@ -275,16 +411,8 @@ export function announceRouteBuilt(
   totalSec: number,
   stopsCount: number,
 ): void {
-  const km = totalKm < 1 ? `${Math.round(totalKm * 1000)} метров` : `${totalKm.toFixed(1).replace(".", ",")} километров`;
-  const min = Math.max(1, Math.round(totalSec / 60));
-  const stopsWord =
-    stopsCount % 10 === 1 && stopsCount % 100 !== 11
-      ? "точка"
-      : stopsCount % 10 >= 2 && stopsCount % 10 <= 4 && (stopsCount % 100 < 12 || stopsCount % 100 > 14)
-        ? "точки"
-        : "точек";
   voice.speak(
-    `Маршрут построен. ${stopsCount} ${stopsWord}, ${km}, около ${min} минут.`,
+    `Маршрут построен. ${stopsCount} ${pluralRu(stopsCount, TOCHKA)}, ${kmPhrase(totalKm)}, ${minPhrase(totalSec)}.`,
   );
 }
 
@@ -299,14 +427,14 @@ export function announceStopDelivered(
   if (remaining <= 0) {
     voice.speak("Заказ доставлен. Все точки выполнены, строю маршрут до депо.");
   } else {
-    const word =
-      remaining % 10 === 1 && remaining % 100 !== 11
-        ? "точка"
-        : remaining % 10 >= 2 && remaining % 10 <= 4 && (remaining % 100 < 12 || remaining % 100 > 14)
-          ? "точки"
-          : "точек";
-    voice.speak(`Заказ доставлен. Осталось ${remaining} ${word}.`);
+    voice.speak(
+      `Заказ доставлен. Осталось ${remaining} ${pluralRu(remaining, TOCHKA)}.`,
+    );
   }
+}
+
+export function announceStopUndone(voice: VoiceController): void {
+  voice.speak("Отмена. Возврат к предыдущей точке.");
 }
 
 export function announceReturningToDepot(voice: VoiceController): void {

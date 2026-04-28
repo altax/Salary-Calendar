@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useGeolocation } from "@/lib/geolocation";
+import { useGeolocation, type GeoPosition } from "@/lib/geolocation";
 import { type PendingOrder } from "@/lib/deliveries";
 import type { Depot, ResolvedJob } from "@/lib/store";
 import DeliveryMap, {
@@ -11,6 +11,7 @@ import {
   buildRouteIndex,
   computeProgress,
   distanceM as distanceMeters,
+  bearingDeg,
   getLegGeometry,
   legSliceFromProjection,
   type LatLng,
@@ -24,6 +25,7 @@ import {
   announceRouteBuilt,
   announceOfflineFallbackRoute,
   announceStopDelivered,
+  announceStopUndone,
   announceReturningToDepot,
   announceShiftFinished,
 } from "@/lib/voice";
@@ -36,6 +38,7 @@ export type DriveModeProps = {
   theme: "dark" | "light";
   onExit: () => void;
   onCompleteStop: (id: string, amountRub: number) => void;
+  onUndoCompleteStop?: (id: string) => void;
   onSkipStop: (id: string) => void;
   onSaveDeliveryRoute?: (
     geometry: [number, number][],
@@ -57,8 +60,20 @@ const REROUTE_COOLDOWN_MS = 10_000;
 const REROUTE_MIN_AGE_MS = 5_000;
 const ROUTE_VISIBLE_KEY = "salary-calendar:drive:route-visible";
 const STOPS_PANEL_KEY = "salary-calendar:drive:stops-open";
+const SIM_SPEED_KEY = "salary-calendar:drive:sim-speed";
+const SIM_TICK_MS = 250;
+const SIM_AUTOCOMPLETE_DELAY_MS = 1500;
+const UNDO_WINDOW_MS = 5_000;
+const SIM_SPEED_PRESETS = [10, 30, 60, 120] as const;
 
 type Mode = "driving" | "returning" | "finished";
+
+type LastCompletedSnapshot = {
+  stopId: string;
+  amount: number;
+  address?: string;
+  expireAt: number;
+};
 
 type RouteRequest = {
   points: LatLng[];
@@ -119,12 +134,35 @@ export default function DriveMode({
   theme,
   onExit,
   onCompleteStop,
+  onUndoCompleteStop,
   onSkipStop,
   onSaveDeliveryRoute,
   onSaveReturnRoute,
   onFinishWave,
 }: DriveModeProps) {
-  const { position, status, error } = useGeolocation(true);
+  // GPS simulator state. When `simEnabled` is true we ignore the real device
+  // GPS and synthesize positions by walking the current route geometry. This
+  // lets the user dry-run the entire wave (delivery legs → arrival auto-pop
+  // → next leg → return-to-depot → шифт finished) without going outside.
+  const [simEnabled, setSimEnabled] = useState(false);
+  const [simRunning, setSimRunning] = useState(false);
+  const [simSpeedKmh, setSimSpeedKmh] = useState<number>(() => {
+    if (typeof window === "undefined") return 30;
+    try {
+      const raw = window.localStorage.getItem(SIM_SPEED_KEY);
+      const n = raw ? Number(raw) : NaN;
+      if (Number.isFinite(n) && n >= 5 && n <= 200) return n;
+    } catch {}
+    return 30;
+  });
+  const [simPosition, setSimPosition] = useState<GeoPosition | null>(null);
+  const [simPanelOpen, setSimPanelOpen] = useState(false);
+
+  const realGeo = useGeolocation(!simEnabled);
+  const position: GeoPosition | null = simEnabled ? simPosition : realGeo.position;
+  const status = simEnabled ? "watching" : realGeo.status;
+  const error = simEnabled ? null : realGeo.error;
+
   const [completing, setCompleting] = useState<{ id: string; value: string } | null>(null);
   const [muted, setMuted] = useState(false);
   const [routeVisible, setRouteVisible] = useState(() =>
@@ -137,6 +175,9 @@ export default function DriveMode({
     pending.length === 0 ? "returning" : "driving",
   );
   const [routeRequest, setRouteRequest] = useState<RouteRequest | null>(null);
+  const [lastCompleted, setLastCompleted] =
+    useState<LastCompletedSnapshot | null>(null);
+  const [, forceTick] = useState(0);
 
   const voiceRef = useRef(createVoiceController(false));
   const announcerRef = useRef(new StepAnnouncer());
@@ -161,6 +202,35 @@ export default function DriveMode({
   useEffect(() => {
     saveBool(STOPS_PANEL_KEY, stopsOpen);
   }, [stopsOpen]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(SIM_SPEED_KEY, String(simSpeedKmh));
+    } catch {}
+  }, [simSpeedKmh]);
+
+  // When the simulator is first enabled, drop the synthetic position at depot
+  // (or wherever the real GPS last was, if we have a fix) so that the route
+  // builder has somewhere to start from.
+  useEffect(() => {
+    if (!simEnabled) {
+      setSimRunning(false);
+      return;
+    }
+    if (simPosition) return;
+    const seed = realGeo.position
+      ? { lat: realGeo.position.lat, lng: realGeo.position.lng }
+      : { lat: depot.lat, lng: depot.lng };
+    setSimPosition({
+      lat: seed.lat,
+      lng: seed.lng,
+      accuracy: 5,
+      heading: null,
+      speed: 0,
+      timestamp: Date.now(),
+    });
+  }, [simEnabled, depot.lat, depot.lng, realGeo.position, simPosition]);
 
   // Build initial delivery route as soon as GPS is available and we have stops.
   useEffect(() => {
@@ -266,6 +336,67 @@ export default function DriveMode({
     if (!route.route) return null;
     return buildRouteIndex(route.route);
   }, [route.route]);
+
+  // ----------------------------------------------------------------
+  // GPS simulator: advance synthetic position along the active route
+  // ----------------------------------------------------------------
+  const simDistRef = useRef<number>(0);
+  const simBuiltAtRef = useRef<number>(0);
+
+  // Reset traveled distance when the route is rebuilt — the new geometry
+  // always starts from the current position, so distFromStart=0.
+  useEffect(() => {
+    if (!routeRequest) return;
+    if (routeRequest.builtAt !== simBuiltAtRef.current) {
+      simBuiltAtRef.current = routeRequest.builtAt;
+      simDistRef.current = 0;
+    }
+  }, [routeRequest?.builtAt]);
+
+  useEffect(() => {
+    if (!simEnabled || !simRunning) return;
+    if (!routeIndex || routeIndex.geometry.length < 2) return;
+    const speedMps = Math.max(0.5, simSpeedKmh / 3.6);
+    const tick = () => {
+      const idx = routeIndex;
+      const stepM = speedMps * (SIM_TICK_MS / 1000);
+      const nextDist = Math.min(idx.totalLength, simDistRef.current + stepM);
+      simDistRef.current = nextDist;
+      // Find segment whose cum range contains nextDist
+      let segI = 0;
+      while (
+        segI < idx.cumLengths.length - 2 &&
+        idx.cumLengths[segI + 1] < nextDist
+      ) {
+        segI += 1;
+      }
+      const segLen = idx.segLengths[segI] || 1;
+      const t = Math.max(0, Math.min(1, (nextDist - idx.cumLengths[segI]) / segLen));
+      const a = idx.geometry[segI];
+      const b = idx.geometry[segI + 1] ?? a;
+      const lat = a[0] + (b[0] - a[0]) * t;
+      const lng = a[1] + (b[1] - a[1]) * t;
+      const heading = bearingDeg(
+        { lat: a[0], lng: a[1] },
+        { lat: b[0], lng: b[1] },
+      );
+      setSimPosition({
+        lat,
+        lng,
+        accuracy: 5,
+        heading: Number.isFinite(heading) ? heading : null,
+        speed: speedMps,
+        timestamp: Date.now(),
+      });
+      // Auto-pause once the synthetic driver hits the very end of the route —
+      // the existing arrival/finish handlers below will pick it up.
+      if (nextDist >= idx.totalLength - 0.5) {
+        setSimRunning(false);
+      }
+    };
+    const id = window.setInterval(tick, SIM_TICK_MS);
+    return () => window.clearInterval(id);
+  }, [simEnabled, simRunning, routeIndex, simSpeedKmh, routeRequest?.builtAt]);
 
   const progress = useMemo(() => {
     if (!routeIndex || !position) return null;
@@ -545,14 +676,71 @@ export default function DriveMode({
       const id = overrideId ?? completing?.id;
       const amount = overrideAmount ?? Number(completing?.value);
       if (!id || !Number.isFinite(amount) || amount <= 0) return;
+      // Snapshot the address BEFORE we mutate `pending` so the toast can
+      // show "↻ отменить — ул. Восстания, 1" even after the stop is gone.
+      const wasLast = pending.length === 1 && pending[0].id === id;
+      const snap = wasLast
+        ? {
+            stopId: id,
+            amount,
+            address: pending[0]?.address,
+            expireAt: Date.now() + UNDO_WINDOW_MS,
+          }
+        : null;
       onCompleteStop(id, amount);
       announceStopDelivered(voiceRef.current, Math.max(0, pending.length - 1));
       setCompleting(null);
       arrivalAnnouncedRef.current = false;
       arrivalTriggeredRef.current = null;
+      if (snap) setLastCompleted(snap);
     },
-    [completing, onCompleteStop, pending.length],
+    [completing, onCompleteStop, pending],
   );
+
+  // Auto-submit the completion modal when the simulator drove us to a stop.
+  // We use the preset rate (per-order rate from the job, or the stop's price);
+  // if neither is set, we fall back to ₽100 so the dry-run still flows.
+  useEffect(() => {
+    if (!simEnabled || !completing) return;
+    const stop = pending.find((p) => p.id === completing.id);
+    if (!stop) return;
+    const stopJob = jobs.find((j) => j.id === stop.jobId);
+    const presetRate =
+      stopJob?.perOrderRateRub ?? stop.priceRub ?? 100;
+    const handle = window.setTimeout(() => {
+      finishCompletion(completing.id, presetRate);
+    }, SIM_AUTOCOMPLETE_DELAY_MS);
+    return () => window.clearTimeout(handle);
+  }, [simEnabled, completing, pending, jobs, finishCompletion]);
+
+  // Lightweight 1Hz tick while the undo toast is visible — drives the
+  // countdown text and auto-dismiss.
+  useEffect(() => {
+    if (!lastCompleted) return;
+    const id = window.setInterval(() => {
+      if (Date.now() >= lastCompleted.expireAt) {
+        setLastCompleted(null);
+      } else {
+        forceTick((n) => n + 1);
+      }
+    }, 250);
+    return () => window.clearInterval(id);
+  }, [lastCompleted]);
+
+  const handleUndoLast = useCallback(() => {
+    if (!lastCompleted) return;
+    onUndoCompleteStop?.(lastCompleted.stopId);
+    // Force a fresh delivery route. Setting mode back to driving lets the
+    // route-rebuild useEffect rerun (it gates on mode === "driving").
+    setMode("driving");
+    arrivalAnnouncedRef.current = false;
+    arrivalTriggeredRef.current = null;
+    announcerRef.current.reset();
+    stopAnnouncerRef.current.reset();
+    finishAnnouncedRef.current = false;
+    announceStopUndone(voiceRef.current);
+    setLastCompleted(null);
+  }, [lastCompleted, onUndoCompleteStop]);
 
   const manualArrived = useCallback(() => {
     if (!active) return;
@@ -660,6 +848,25 @@ export default function DriveMode({
             title={muted ? "Голос выключен" : "Голос включён"}
           >
             {muted ? "🔇" : "🔊"}
+          </button>
+          <button
+            onClick={() => {
+              if (!simEnabled) {
+                setSimEnabled(true);
+                setSimPanelOpen(true);
+              } else {
+                setSimPanelOpen((v) => !v);
+              }
+            }}
+            className={cn(
+              "h-10 w-auto px-2 rounded-md border text-[10px] font-bold uppercase tracking-wider transition-colors flex items-center justify-center",
+              simEnabled
+                ? "border-amber-500 bg-amber-500/15 text-amber-600 dark:text-amber-400"
+                : "border-border text-muted-foreground hover:bg-muted",
+            )}
+            title={simEnabled ? "Симулятор GPS включён" : "Симулятор GPS"}
+          >
+            {simEnabled ? `СИМ ${simSpeedKmh}` : "СИМ"}
           </button>
           <div className="flex flex-col items-end text-right pl-1">
             <div className="text-[9px] uppercase tracking-[0.25em] text-muted-foreground">
@@ -1083,6 +1290,98 @@ export default function DriveMode({
           </div>
         )}
       </div>
+
+      {/* GPS simulator panel — floating, bottom-left */}
+      {simEnabled && simPanelOpen && (
+        <div className="absolute bottom-24 left-3 z-[2050] w-[200px] rounded-lg border border-amber-500/60 bg-card/95 backdrop-blur p-3 shadow-xl">
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-amber-600 dark:text-amber-400">
+              ⚠ симулятор
+            </div>
+            <button
+              onClick={() => setSimPanelOpen(false)}
+              className="text-muted-foreground hover:text-foreground text-[14px] leading-none"
+              title="Скрыть панель"
+            >
+              ×
+            </button>
+          </div>
+          <div className="grid grid-cols-4 gap-1 mb-2">
+            {SIM_SPEED_PRESETS.map((s) => (
+              <button
+                key={s}
+                onClick={() => setSimSpeedKmh(s)}
+                className={cn(
+                  "h-8 rounded text-[10px] font-semibold tabular-nums transition-colors",
+                  simSpeedKmh === s
+                    ? "bg-amber-500 text-white"
+                    : "border border-border text-muted-foreground hover:bg-muted",
+                )}
+              >
+                {s}
+              </button>
+            ))}
+          </div>
+          <div className="flex gap-1.5">
+            <button
+              onClick={() => setSimRunning((r) => !r)}
+              disabled={!routeIndex}
+              className={cn(
+                "flex-1 h-9 rounded text-[11px] font-bold uppercase tracking-wider transition-colors",
+                simRunning
+                  ? "bg-amber-500 text-white"
+                  : "border border-amber-500 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10",
+                !routeIndex && "opacity-40 cursor-not-allowed",
+              )}
+              title={routeIndex ? "" : "Дождитесь построения маршрута"}
+            >
+              {simRunning ? "⏸ пауза" : "▶ старт"}
+            </button>
+            <button
+              onClick={() => {
+                setSimRunning(false);
+                setSimEnabled(false);
+                setSimPanelOpen(false);
+                setSimPosition(null);
+                simDistRef.current = 0;
+              }}
+              className="h-9 px-2 rounded border border-border text-[10px] uppercase tracking-wider text-muted-foreground hover:bg-muted transition-colors"
+              title="Выключить симулятор и вернуться к реальному GPS"
+            >
+              GPS
+            </button>
+          </div>
+          <div className="mt-2 text-[9px] text-muted-foreground tabular-nums leading-tight">
+            {simSpeedKmh} км/ч · {Math.round(simDistRef.current)} м
+          </div>
+        </div>
+      )}
+
+      {/* Undo toast — appears for 5s after the LAST "✓ доставлено" tap */}
+      {lastCompleted && (() => {
+        const remaining = Math.max(
+          0,
+          Math.ceil((lastCompleted.expireAt - Date.now()) / 1000),
+        );
+        return (
+          <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-[2100] flex items-center gap-3 px-4 py-3 rounded-xl border border-primary/60 bg-card shadow-2xl">
+            <div className="flex flex-col">
+              <div className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+                волна закрыта
+              </div>
+              <div className="text-[12px] font-semibold truncate max-w-[180px]">
+                {lastCompleted.address || "последняя точка"} · {lastCompleted.amount}₽
+              </div>
+            </div>
+            <button
+              onClick={handleUndoLast}
+              className="h-11 px-4 rounded-lg bg-primary text-primary-foreground text-[12px] font-bold uppercase tracking-wider hover:bg-primary/90 transition-colors tabular-nums"
+            >
+              ↻ отменить ({remaining})
+            </button>
+          </div>
+        );
+      })()}
     </div>
   );
 }

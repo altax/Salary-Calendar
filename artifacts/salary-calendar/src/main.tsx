@@ -14,14 +14,18 @@ import { setRoutingProfile } from "@/lib/routing";
   }
 })();
 
-// Restore the user's last routing profile choice (bike / foot / car) BEFORE
-// the first useRoute / useDistanceMatrix fires, so the very first request
-// goes to the correct OSRM endpoint.
+// Restore the user's last routing profile choice (bike / car) BEFORE the
+// first useRoute / useDistanceMatrix fires, so the very first request goes
+// to the correct OSRM endpoint. Legacy "foot" values are silently mapped to
+// "bike" for migration.
 (() => {
   try {
     const raw = localStorage.getItem("salary-calendar:routing-profile:v1");
-    if (raw === "bike" || raw === "foot" || raw === "car") {
+    if (raw === "bike" || raw === "car") {
       setRoutingProfile(raw);
+    } else if (raw === "foot") {
+      setRoutingProfile("bike");
+      localStorage.setItem("salary-calendar:routing-profile:v1", "bike");
     }
   } catch {}
 })();

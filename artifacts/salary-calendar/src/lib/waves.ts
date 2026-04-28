@@ -277,6 +277,26 @@ export function useWavesStore(depot: Depot) {
     [updateActiveWave],
   );
 
+  const undoCompleteStop = useCallback(
+    (id: string) => {
+      updateActiveWave((w) => ({
+        ...w,
+        stops: w.stops.map((s) =>
+          s.id === id
+            ? {
+                ...s,
+                status: "pending" as const,
+                amountRub: undefined,
+                deliveredAt: undefined,
+                deliveryId: undefined,
+              }
+            : s,
+        ),
+      }));
+    },
+    [updateActiveWave],
+  );
+
   const skipStop = useCallback(
     (id: string) => {
       updateActiveWave((w) => ({
@@ -373,6 +393,7 @@ export function useWavesStore(depot: Depot) {
     removeStop,
     reorderStops,
     completeStop,
+    undoCompleteStop,
     skipStop,
     saveDeliveryRoute,
     saveReturnRoute,

@@ -74,27 +74,23 @@ export interface RoutingProvider {
 }
 
 // Routing profiles. The app is for an e-bike courier in St. Petersburg, so
-// `bike` is the default — it routes via cycleways and many footways. `foot`
-// allows aggressive shortcuts through pedestrian zones, plazas, underpasses
-// (slower estimated speed but often shorter distance). `car` is a fallback
-// for motorized transport.
-export type RouteProfile = "bike" | "foot" | "car";
+// `bike` is the default — it routes via cycleways and many footways. `car`
+// is a fallback for motorized transport. (Walking mode was removed — the
+// courier is never on foot during a shift.)
+export type RouteProfile = "bike" | "car";
 
 export const PROFILE_LABELS: Record<RouteProfile, string> = {
   bike: "велосипед",
-  foot: "пешком",
   car: "машина",
 };
 
 // Public OSRM-compatible servers per profile.
 //   bike → routing.openstreetmap.de/routed-bike, profile name `bike`
-//   foot → routing.openstreetmap.de/routed-foot, profile name `foot`
 //   car  → router.project-osrm.org,            profile name `driving`
 type ProfileEndpoint = { base: string; pathProfile: string };
 
 const PROFILE_ENDPOINTS: Record<RouteProfile, ProfileEndpoint> = {
   bike: { base: "https://routing.openstreetmap.de/routed-bike", pathProfile: "bike" },
-  foot: { base: "https://routing.openstreetmap.de/routed-foot", pathProfile: "foot" },
   car: { base: "https://router.project-osrm.org", pathProfile: "driving" },
 };
 
@@ -102,7 +98,6 @@ const PROFILE_ENDPOINTS: Record<RouteProfile, ProfileEndpoint> = {
 // the offline fallback ETA isn't laughably wrong.
 const PROFILE_FALLBACK_SPEED_MPS: Record<RouteProfile, number> = {
   bike: 6, // ~22 km/h
-  foot: 1.4, // ~5 km/h
   car: 11, // ~40 km/h
 };
 

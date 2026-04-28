@@ -299,6 +299,21 @@ export default function MapView() {
     [pending, deliveriesStore, wavesStore],
   );
 
+  // Reverse of completePendingStop. Used by the "↻ отменить" toast that the
+  // drive screen pops up after the LAST "доставлено" tap.
+  const undoCompletePendingStop = useCallback(
+    (id: string) => {
+      const wave = wavesStore.activeWave;
+      const stop = wave?.stops.find((s) => s.id === id);
+      if (!stop) return;
+      if (stop.deliveryId) {
+        deliveriesStore.removeDelivery(stop.deliveryId);
+      }
+      wavesStore.undoCompleteStop(id);
+    },
+    [wavesStore, deliveriesStore],
+  );
+
   // Translate a wave's pending stop into the legacy PendingOrder shape used
   // throughout the existing UI components without changing their signatures.
   const pendingForUi: PendingOrder[] = useMemo(
@@ -345,6 +360,9 @@ export default function MapView() {
         onExit={() => setDriving(false)}
         onCompleteStop={(id, amount) => {
           completePendingStop(id, amount);
+        }}
+        onUndoCompleteStop={(id) => {
+          undoCompletePendingStop(id);
         }}
         onSkipStop={(id) => {
           // move to end of queue (keeps stop in active wave)
@@ -575,10 +593,9 @@ export default function MapView() {
 const PROFILE_KEY = "salary-calendar:routing-profile:v1";
 const PROFILE_GLYPH: Record<RouteProfile, string> = {
   bike: "🚲",
-  foot: "🚶",
   car: "🚗",
 };
-const PROFILE_ORDER: RouteProfile[] = ["bike", "foot", "car"];
+const PROFILE_ORDER: RouteProfile[] = ["bike", "car"];
 
 function ProfileChip() {
   const profile = useRoutingProfile();
@@ -588,8 +605,11 @@ function ProfileChip() {
   useEffect(() => {
     try {
       const raw = localStorage.getItem(PROFILE_KEY);
-      if (raw === "bike" || raw === "foot" || raw === "car") {
+      if (raw === "bike" || raw === "car") {
         setRoutingProfile(raw);
+      } else if (raw === "foot") {
+        setRoutingProfile("bike");
+        localStorage.setItem(PROFILE_KEY, "bike");
       }
     } catch {}
     // eslint-disable-next-line react-hooks/exhaustive-deps
