@@ -21,6 +21,7 @@ export type PendingOrder = {
   lat: number;
   lng: number;
   address?: string;
+  priceRub?: number;
   createdAt: number;
 };
 

@@ -6,11 +6,13 @@ import {
   Marker,
   Polyline,
   Tooltip,
+  Circle,
   useMap,
   useMapEvents,
 } from "react-leaflet";
 import type { Delivery, PendingOrder } from "@/lib/deliveries";
-import type { ResolvedJob } from "@/lib/store";
+import type { ResolvedJob, Depot } from "@/lib/store";
+import type { GeoPosition } from "@/lib/geolocation";
 
 const SPB_CENTER: [number, number] = [59.9343, 30.3351];
 
@@ -71,31 +73,92 @@ function makePendingIcon(opts: {
   index: number;
   color: string;
   outline: string;
+  active?: boolean;
   size?: number;
 }) {
-  const { index, color, outline, size = 24 } = opts;
+  const { index, color, outline, active, size = 28 } = opts;
+  const bg = active ? color : "transparent";
+  const fg = active ? (color === "#fafafa" ? "#0a0a0a" : "#fff") : color;
   const html = `
     <div style="
       width: ${size}px;
       height: ${size}px;
-      border-radius: 4px;
-      background: transparent;
-      color: ${color};
-      border: 1.5px dashed ${color};
-      box-shadow: 0 0 0 2px rgba(0,0,0,0.45);
+      border-radius: 50%;
+      background: ${bg};
+      color: ${fg};
+      border: ${active ? 2 : 1.5}px ${active ? "solid" : "dashed"} ${color};
+      box-shadow: 0 0 0 2px ${outline}${active ? ", 0 0 0 6px " + color + "33" : ""};
       display: flex;
       align-items: center;
       justify-content: center;
       font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace;
-      font-size: 9px;
+      font-size: ${size <= 24 ? 10 : 11}px;
       font-weight: 700;
       letter-spacing: 0.02em;
       line-height: 1;
-      transform: rotate(45deg);
-    "><span style="transform: rotate(-45deg);">${String(index).padStart(2, "0")}</span></div>
+    ">${index}</div>
   `;
   return L.divIcon({
     className: "pending-marker",
+    html,
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2],
+  });
+}
+
+function makeDepotIcon(opts: { theme: "dark" | "light"; size?: number }) {
+  const { theme, size = 32 } = opts;
+  const bg = theme === "dark" ? "#fafafa" : "#0a0a0a";
+  const fg = theme === "dark" ? "#0a0a0a" : "#fafafa";
+  const html = `
+    <div style="
+      width: ${size}px;
+      height: ${size}px;
+      border-radius: 6px;
+      background: ${bg};
+      color: ${fg};
+      border: 2px solid ${bg};
+      box-shadow: 0 0 0 3px rgba(0,0,0,0.5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+      font-size: 14px;
+      font-weight: 700;
+      line-height: 1;
+    ">⌂</div>
+  `;
+  return L.divIcon({
+    className: "depot-marker",
+    html,
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2],
+  });
+}
+
+function makeUserIcon(opts: { heading: number | null; size?: number }) {
+  const { heading, size = 22 } = opts;
+  const arrow =
+    heading != null
+      ? `<div style="position:absolute; top:-4px; left:50%; transform: translate(-50%, -100%) rotate(${heading}deg); transform-origin: 50% 100%;">
+           <div style="width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-bottom:10px solid #3b82f6;"></div>
+         </div>`
+      : "";
+  const html = `
+    <div style="position:relative; width: ${size}px; height: ${size}px;">
+      ${arrow}
+      <div style="
+        width: ${size}px;
+        height: ${size}px;
+        border-radius: 50%;
+        background: #3b82f6;
+        border: 3px solid #fff;
+        box-shadow: 0 0 0 2px rgba(59,130,246,0.4), 0 2px 8px rgba(0,0,0,0.5);
+      "></div>
+    </div>
+  `;
+  return L.divIcon({
+    className: "user-marker",
     html,
     iconSize: [size, size],
     iconAnchor: [size / 2, size / 2],
@@ -122,7 +185,7 @@ function FlyTo({ target }: { target: { lat: number; lng: number; zoom?: number }
   return null;
 }
 
-function FitBounds({ points }: { points: { lat: number; lng: number }[] }) {
+function FitBounds({ points, animate = true }: { points: { lat: number; lng: number }[]; animate?: boolean }) {
   const map = useMap();
   const lastKey = useRef<string>("");
   useEffect(() => {
@@ -131,8 +194,19 @@ function FitBounds({ points }: { points: { lat: number; lng: number }[] }) {
     if (key === lastKey.current) return;
     lastKey.current = key;
     const bounds = L.latLngBounds(points.map((p) => [p.lat, p.lng] as [number, number]));
-    map.fitBounds(bounds, { padding: [40, 40], maxZoom: 15, animate: true });
-  }, [points, map]);
+    map.fitBounds(bounds, { padding: [60, 60], maxZoom: 15, animate });
+  }, [points, map, animate]);
+  return null;
+}
+
+function FollowUser({ position }: { position: GeoPosition | null }) {
+  const map = useMap();
+  useEffect(() => {
+    if (!position) return;
+    map.setView([position.lat, position.lng], Math.max(map.getZoom(), 16), {
+      animate: true,
+    });
+  }, [position?.lat, position?.lng]);
   return null;
 }
 
@@ -141,16 +215,24 @@ export type DeliveryMapProps = {
   pending: PendingOrder[];
   jobs: ResolvedJob[];
   theme: "dark" | "light";
+  depot?: Depot | null;
+  showDepot?: boolean;
+  userPosition?: GeoPosition | null;
+  followUser?: boolean;
+  activePendingId?: string | null;
   onMapClick?: (lat: number, lng: number) => void;
   onDeliveryClick?: (id: string) => void;
   onPendingClick?: (id: string) => void;
+  onDepotClick?: () => void;
   selectedId?: string | null;
   flyTo?: { lat: number; lng: number; zoom?: number } | null;
   fitToAll?: boolean;
   showRoute?: boolean;
+  showPendingRoute?: boolean;
   filterJob?: string | null;
   className?: string;
   interactive?: boolean;
+  initialZoom?: number;
 };
 
 export default function DeliveryMap({
@@ -158,16 +240,24 @@ export default function DeliveryMap({
   pending,
   jobs,
   theme,
+  depot,
+  showDepot = true,
+  userPosition,
+  followUser = false,
+  activePendingId,
   onMapClick,
   onDeliveryClick,
   onPendingClick,
+  onDepotClick,
   selectedId,
   flyTo,
   fitToAll,
   showRoute = true,
+  showPendingRoute = true,
   filterJob,
   className,
   interactive = true,
+  initialZoom = 11,
 }: DeliveryMapProps) {
   const sortedDeliveries = useMemo(
     () =>
@@ -190,10 +280,11 @@ export default function DeliveryMap({
   const fitPoints = useMemo(() => {
     if (!fitToAll) return [] as { lat: number; lng: number }[];
     const pts: { lat: number; lng: number }[] = [];
+    if (depot && showDepot) pts.push({ lat: depot.lat, lng: depot.lng });
     for (const d of sortedDeliveries) pts.push({ lat: d.lat, lng: d.lng });
     for (const p of pending) pts.push({ lat: p.lat, lng: p.lng });
     return pts;
-  }, [fitToAll, sortedDeliveries, pending]);
+  }, [fitToAll, sortedDeliveries, pending, depot, showDepot]);
 
   const routeByJob = useMemo(() => {
     if (!showRoute) return [] as { color: string; positions: [number, number][] }[];
@@ -214,11 +305,31 @@ export default function DeliveryMap({
     return result;
   }, [sortedDeliveries, showRoute, jobMap, theme]);
 
+  const pendingRoutePositions = useMemo(() => {
+    if (!showPendingRoute || pending.length === 0) return null;
+    const positions: [number, number][] = [];
+    if (depot) positions.push([depot.lat, depot.lng]);
+    for (const p of pending) positions.push([p.lat, p.lng]);
+    return positions;
+  }, [pending, depot, showPendingRoute]);
+
+  const activeRoutePositions = useMemo(() => {
+    if (!activePendingId || !userPosition) return null;
+    const target = pending.find((p) => p.id === activePendingId);
+    if (!target) return null;
+    return [
+      [userPosition.lat, userPosition.lng],
+      [target.lat, target.lng],
+    ] as [number, number][];
+  }, [activePendingId, userPosition, pending]);
+
+  const accentColor = theme === "dark" ? "#fafafa" : "#0a0a0a";
+
   return (
     <div className={className} style={{ position: "relative", height: "100%", width: "100%" }}>
       <MapContainer
-        center={SPB_CENTER}
-        zoom={11}
+        center={depot ? [depot.lat, depot.lng] : SPB_CENTER}
+        zoom={initialZoom}
         scrollWheelZoom={interactive}
         zoomControl={interactive}
         dragging={interactive}
@@ -231,6 +342,30 @@ export default function DeliveryMap({
         {interactive && onMapClick && <ClickHandler onClick={onMapClick} />}
         <FlyTo target={flyTo ?? null} />
         {fitToAll && <FitBounds points={fitPoints} />}
+        {followUser && <FollowUser position={userPosition ?? null} />}
+
+        {pendingRoutePositions && pendingRoutePositions.length >= 2 && (
+          <Polyline
+            positions={pendingRoutePositions}
+            pathOptions={{
+              color: accentColor,
+              weight: 3,
+              opacity: 0.55,
+            }}
+          />
+        )}
+
+        {activeRoutePositions && (
+          <Polyline
+            positions={activeRoutePositions}
+            pathOptions={{
+              color: "#3b82f6",
+              weight: 4,
+              opacity: 0.85,
+              dashArray: "8 6",
+            }}
+          />
+        )}
 
         {routeByJob.map((r, i) => (
           <Polyline
@@ -239,11 +374,27 @@ export default function DeliveryMap({
             pathOptions={{
               color: r.color,
               weight: 2,
-              opacity: 0.7,
+              opacity: 0.55,
               dashArray: "4 4",
             }}
           />
         ))}
+
+        {depot && showDepot && (
+          <Marker
+            position={[depot.lat, depot.lng]}
+            icon={makeDepotIcon({ theme })}
+            eventHandlers={{ click: () => onDepotClick?.() }}
+          >
+            <Tooltip direction="top" offset={[0, -16]} opacity={1} className="map-tooltip">
+              <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, lineHeight: 1.4 }}>
+                <div style={{ opacity: 0.7 }}>депо · старт</div>
+                <div style={{ fontWeight: 700 }}>{depot.name}</div>
+                <div style={{ opacity: 0.7 }}>{depot.address}</div>
+              </div>
+            </Tooltip>
+          </Marker>
+        )}
 
         {sortedDeliveries.map((d, i) => {
           const job = jobMap.get(d.jobId);
@@ -258,7 +409,7 @@ export default function DeliveryMap({
                 color,
                 fg,
                 outline,
-                size: isSelected ? 32 : 26,
+                size: isSelected ? 32 : 24,
               })}
               eventHandlers={{
                 click: () => onDeliveryClick?.(d.id),
@@ -290,15 +441,17 @@ export default function DeliveryMap({
           const job = jobMap.get(p.jobId);
           const color = jobColor(job, theme);
           const isSelected = selectedId === p.id;
+          const isActive = activePendingId === p.id;
           return (
             <Marker
               key={p.id}
               position={[p.lat, p.lng]}
               icon={makePendingIcon({
                 index: i + 1,
-                color,
+                color: isActive ? "#3b82f6" : color,
                 outline,
-                size: isSelected ? 30 : 24,
+                active: isActive,
+                size: isSelected || isActive ? 34 : 28,
               })}
               eventHandlers={{
                 click: () => onPendingClick?.(p.id),
@@ -307,7 +460,7 @@ export default function DeliveryMap({
               <Tooltip direction="top" offset={[0, -14]} opacity={1} className="map-tooltip">
                 <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, lineHeight: 1.4 }}>
                   <div style={{ opacity: 0.7 }}>
-                    ожидает · {job?.label ?? p.jobId}
+                    {isActive ? "следующая" : "ожидает"} · {job?.label ?? p.jobId}
                   </div>
                   {p.address && <div style={{ opacity: 0.9 }}>{p.address}</div>}
                 </div>
@@ -315,6 +468,38 @@ export default function DeliveryMap({
             </Marker>
           );
         })}
+
+        {userPosition && (
+          <>
+            <Circle
+              center={[userPosition.lat, userPosition.lng]}
+              radius={Math.max(userPosition.accuracy, 10)}
+              pathOptions={{
+                color: "#3b82f6",
+                weight: 1,
+                opacity: 0.4,
+                fillColor: "#3b82f6",
+                fillOpacity: 0.1,
+              }}
+            />
+            <Marker
+              position={[userPosition.lat, userPosition.lng]}
+              icon={makeUserIcon({ heading: userPosition.heading })}
+              zIndexOffset={1000}
+            >
+              <Tooltip direction="top" offset={[0, -10]} opacity={1} className="map-tooltip">
+                <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10 }}>
+                  моё местоположение
+                  {userPosition.speed != null && userPosition.speed > 0.5 && (
+                    <div style={{ opacity: 0.7 }}>
+                      {(userPosition.speed * 3.6).toFixed(0)} км/ч
+                    </div>
+                  )}
+                </div>
+              </Tooltip>
+            </Marker>
+          </>
+        )}
       </MapContainer>
     </div>
   );

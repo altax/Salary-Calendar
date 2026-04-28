@@ -26,6 +26,8 @@ const TAX_RATE_KEY = "salary-calendar:tax-rate:v1";
 const CATEGORIES_KEY = "salary-calendar:categories:v1";
 const JOB_CONFIGS_KEY = "salary-calendar:job-configs:v1";
 const RECENT_AMOUNTS_KEY = "salary-calendar:recent-amounts:v1";
+const DEPOT_KEY = "salary-calendar:depot:v1";
+const SHIFTS_KEY = "salary-calendar:shifts:v1";
 const MAP_RESET_FLAG = "salary-calendar:reset:map-v1";
 
 const UNDO_LIMIT = 30;
@@ -106,6 +108,8 @@ export type JobConfig = {
   label?: string;
   short?: string;
   color?: string | null;
+  shiftBonusRub?: number;
+  perOrderRateRub?: number;
 };
 export type JobConfigs = Partial<Record<JobId, JobConfig>>;
 
@@ -114,12 +118,30 @@ export type ResolvedJob = {
   short: string;
   label: string;
   color: string | null;
+  shiftBonusRub: number;
+  perOrderRateRub: number;
 };
 
 export const DEFAULT_JOBS: ResolvedJob[] = [
-  { id: "ozon", short: "о", label: "Озон ПВЗ", color: null },
-  { id: "dostaevsky", short: "д", label: "Достаевский", color: null },
+  { id: "ozon", short: "о", label: "Озон ПВЗ", color: null, shiftBonusRub: 0, perOrderRateRub: 0 },
+  { id: "dostaevsky", short: "д", label: "Достаевский", color: null, shiftBonusRub: 4000, perOrderRateRub: 180 },
 ];
+
+export type Depot = {
+  lat: number;
+  lng: number;
+  name: string;
+  address: string;
+};
+
+export const DEFAULT_DEPOT: Depot = {
+  lat: 59.8669,
+  lng: 30.3794,
+  name: "Производство",
+  address: "Бухарестская 89, Санкт-Петербург",
+};
+
+export type Shifts = Record<string, Partial<Record<JobId, boolean>>>;
 
 export const JOB_COLOR_PALETTE: { value: string; label: string }[] = [
   { value: "#0f172a", label: "графит" },
@@ -357,8 +379,44 @@ function resolveJobs(configs: JobConfigs): ResolvedJob[] {
       short: (cfg.short || j.short).slice(0, 2),
       label: cfg.label || j.label,
       color: cfg.color ?? null,
+      shiftBonusRub:
+        typeof cfg.shiftBonusRub === "number" ? cfg.shiftBonusRub : j.shiftBonusRub,
+      perOrderRateRub:
+        typeof cfg.perOrderRateRub === "number" ? cfg.perOrderRateRub : j.perOrderRateRub,
     };
   });
+}
+
+function loadDepot(): Depot {
+  try {
+    const raw = localStorage.getItem(DEPOT_KEY);
+    if (!raw) return DEFAULT_DEPOT;
+    const p = JSON.parse(raw);
+    if (
+      p &&
+      typeof p.lat === "number" &&
+      typeof p.lng === "number" &&
+      typeof p.address === "string"
+    ) {
+      return {
+        lat: p.lat,
+        lng: p.lng,
+        name: typeof p.name === "string" ? p.name : DEFAULT_DEPOT.name,
+        address: p.address,
+      };
+    }
+  } catch {}
+  return DEFAULT_DEPOT;
+}
+
+function loadShifts(): Shifts {
+  try {
+    const raw = localStorage.getItem(SHIFTS_KEY);
+    if (!raw) return {};
+    const p = JSON.parse(raw);
+    if (p && typeof p === "object") return p as Shifts;
+  } catch {}
+  return {};
 }
 
 type UndoEntry = {
@@ -399,6 +457,8 @@ export function useSalaryStore() {
     () => loadRecentAmounts(),
   );
   const [theme, setThemeState] = useState<Theme>(() => loadTheme());
+  const [depot, setDepotState] = useState<Depot>(() => loadDepot());
+  const [shifts, setShiftsState] = useState<Shifts>(() => loadShifts());
 
   // Undo stack stays in a ref so it doesn't trigger re-renders.
   const undoStackRef = useRef<UndoEntry[]>([]);
@@ -468,6 +528,18 @@ export function useSalaryStore() {
   useEffect(() => {
     localStorage.setItem(RECENT_AMOUNTS_KEY, JSON.stringify(recentAmounts));
   }, [recentAmounts]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(DEPOT_KEY, JSON.stringify(depot));
+    } catch {}
+  }, [depot]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SHIFTS_KEY, JSON.stringify(shifts));
+    } catch {}
+  }, [shifts]);
 
   useEffect(() => {
     const cached = loadCachedRates();
@@ -712,7 +784,13 @@ export function useSalaryStore() {
 
   const setJobConfig = (
     jobId: JobId,
-    cfg: { label?: string; short?: string; color?: string | null },
+    cfg: {
+      label?: string;
+      short?: string;
+      color?: string | null;
+      shiftBonusRub?: number;
+      perOrderRateRub?: number;
+    },
   ) => {
     setJobConfigs((prev) => {
       const next: JobConfigs = { ...prev };
@@ -722,13 +800,64 @@ export function useSalaryStore() {
         ...(cfg.label !== undefined ? { label: cfg.label.trim() || undefined } : {}),
         ...(cfg.short !== undefined ? { short: cfg.short.trim().slice(0, 2) || undefined } : {}),
         ...(cfg.color !== undefined ? { color: cfg.color } : {}),
+        ...(cfg.shiftBonusRub !== undefined
+          ? { shiftBonusRub: Math.max(0, Math.round(cfg.shiftBonusRub)) }
+          : {}),
+        ...(cfg.perOrderRateRub !== undefined
+          ? { perOrderRateRub: Math.max(0, Math.round(cfg.perOrderRateRub)) }
+          : {}),
       };
       // Drop empty configs entirely
       const v = next[jobId]!;
-      if (!v.label && !v.short && !v.color) delete next[jobId];
+      if (
+        !v.label &&
+        !v.short &&
+        !v.color &&
+        v.shiftBonusRub === undefined &&
+        v.perOrderRateRub === undefined
+      )
+        delete next[jobId];
       return next;
     });
   };
+
+  const setDepot = (next: Partial<Depot>) => {
+    setDepotState((cur) => ({ ...cur, ...next }));
+  };
+  const resetDepot = () => setDepotState(DEFAULT_DEPOT);
+
+  const setShiftActive = (dateIso: string, jobId: JobId, active: boolean) => {
+    const job = resolveJobs(jobConfigs).find((j) => j.id === jobId);
+    const bonus = job?.shiftBonusRub ?? 0;
+    if (bonus <= 0) return;
+    const wasActive = !!shifts[dateIso]?.[jobId];
+    if (wasActive === active) return;
+    setShiftsState((prev) => {
+      const day = { ...(prev[dateIso] || {}) };
+      if (active) day[jobId] = true;
+      else delete day[jobId];
+      const out = { ...prev };
+      if (Object.keys(day).length === 0) delete out[dateIso];
+      else out[dateIso] = day;
+      return out;
+    });
+    const delta = active ? bonus : -bonus;
+    setEntries((prev) => {
+      const cur = prev[dateIso] || {};
+      const curJob = cur[jobId] ?? 0;
+      const nextJob = Math.max(0, Math.round((curJob + delta) * 100) / 100);
+      const nextDay: DayEntry = { ...cur };
+      if (nextJob > 0) nextDay[jobId] = nextJob;
+      else delete nextDay[jobId];
+      const out = { ...prev };
+      if (Object.keys(nextDay).length === 0) delete out[dateIso];
+      else out[dateIso] = nextDay;
+      return out;
+    });
+  };
+
+  const isShiftActive = (dateIso: string, jobId: JobId) =>
+    !!shifts[dateIso]?.[jobId];
 
   const resetJobConfig = (jobId: JobId) => {
     setJobConfigs((prev) => {
@@ -972,6 +1101,12 @@ export function useSalaryStore() {
     theme,
     setTheme,
     toggleTheme,
+    depot,
+    setDepot,
+    resetDepot,
+    shifts,
+    setShiftActive,
+    isShiftActive,
     exportData,
     importData,
     sumRangeRub,

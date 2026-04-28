@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation } from "wouter";
-import { format, isSameDay, parseISO, startOfDay, startOfMonth, startOfWeek, subDays } from "date-fns";
+import { format, isSameDay, parseISO, startOfMonth, startOfWeek } from "date-fns";
 import { ru } from "date-fns/locale";
 import {
   useSalaryStore,
   type JobId,
   type ResolvedJob,
+  type Depot,
 } from "@/lib/store";
 import {
   useDeliveriesStore,
@@ -16,10 +17,14 @@ import {
 } from "@/lib/deliveries";
 import { searchAddress, reverseGeocode, type GeocodeResult } from "@/lib/geocode";
 import { nearestNeighborRoute, twoOptImprove } from "@/lib/route-optimizer";
+import { useGeolocation } from "@/lib/geolocation";
 import DeliveryMap from "@/components/DeliveryMap";
+import DriveMode from "@/components/DriveMode";
 import { cn } from "@/lib/utils";
 
 type RangeKey = "today" | "week" | "month" | "all" | "date";
+
+const TODAY_ISO = () => format(new Date(), "yyyy-MM-dd");
 
 function rangeMatches(range: RangeKey, dateIso: string | null, ts: number): boolean {
   const d = new Date(ts);
@@ -78,10 +83,39 @@ export default function MapView() {
   const [showRoute, setShowRoute] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [flyTo, setFlyTo] = useState<{ lat: number; lng: number; zoom?: number } | null>(null);
+  const [gpsEnabled, setGpsEnabled] = useState(false);
+  const [driving, setDriving] = useState(false);
+  const [depotEditOpen, setDepotEditOpen] = useState(false);
+
+  const { position: userPosition, status: gpsStatus } = useGeolocation(gpsEnabled);
 
   useEffect(() => {
     if (queryDate) setRange("date");
   }, [queryDate]);
+
+  // Auto-optimize pending list from depot whenever pending IDs change.
+  const pendingIdsKey = useMemo(
+    () =>
+      deliveriesStore.pending
+        .map((p) => p.id)
+        .slice()
+        .sort()
+        .join(","),
+    [deliveriesStore.pending],
+  );
+
+  useEffect(() => {
+    if (deliveriesStore.pending.length < 2) return;
+    const start = { lat: salary.depot.lat, lng: salary.depot.lng };
+    const ordered = nearestNeighborRoute(start, deliveriesStore.pending);
+    const refined = twoOptImprove(start, ordered);
+    const newOrder = refined.map((p) => p.id);
+    const curOrder = deliveriesStore.pending.map((p) => p.id);
+    if (newOrder.join("|") !== curOrder.join("|")) {
+      deliveriesStore.reorderPending(newOrder);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingIdsKey, salary.depot.lat, salary.depot.lng]);
 
   const visibleDeliveries = useMemo(
     () =>
@@ -118,15 +152,34 @@ export default function MapView() {
     return acc;
   }, [visibleDeliveries]);
 
+  // Pending route metrics (from depot through ordered stops)
+  const pendingKm = useMemo(() => {
+    if (deliveriesStore.pending.length === 0) return 0;
+    const points = [
+      { lat: salary.depot.lat, lng: salary.depot.lng },
+      ...deliveriesStore.pending.map((p) => ({ lat: p.lat, lng: p.lng })),
+    ];
+    return totalRouteKm(points);
+  }, [deliveriesStore.pending, salary.depot]);
+
+  const pendingPotentialRub = useMemo(() => {
+    let sum = 0;
+    for (const p of deliveriesStore.pending) {
+      const job = salary.jobs.find((j) => j.id === p.jobId);
+      const rate = p.priceRub ?? job?.perOrderRateRub ?? 0;
+      sum += rate;
+    }
+    return sum;
+  }, [deliveriesStore.pending, salary.jobs]);
+
   const [addingPoint, setAddingPoint] = useState<{
     lat: number;
     lng: number;
     address?: string;
-    mode: "delivery" | "pending";
   } | null>(null);
 
   const handleMapClick = useCallback((lat: number, lng: number) => {
-    setAddingPoint({ lat, lng, mode: "delivery" });
+    setAddingPoint({ lat, lng });
     reverseGeocode(lat, lng)
       .then((addr) => {
         if (!addr) return;
@@ -139,16 +192,37 @@ export default function MapView() {
       .catch(() => {});
   }, []);
 
+  if (driving) {
+    return (
+      <DriveMode
+        pending={deliveriesStore.pending}
+        jobs={salary.jobs}
+        depot={salary.depot}
+        theme={salary.theme}
+        onExit={() => setDriving(false)}
+        onCompleteStop={(id, amount) => {
+          deliveriesStore.completePending(id, amount);
+        }}
+        onSkipStop={(id) => {
+          // move to end of queue
+          const ids = deliveriesStore.pending.map((p) => p.id);
+          const next = ids.filter((x) => x !== id).concat([id]);
+          deliveriesStore.reorderPending(next);
+        }}
+      />
+    );
+  }
+
   return (
     <div className="h-[100dvh] w-full bg-background text-foreground overflow-hidden p-3 sm:p-4">
       <div
         className="mx-auto w-full max-w-[1280px] h-full grid gap-3 min-h-0"
         style={{
-          gridTemplateColumns: "minmax(0, 1fr) 320px",
+          gridTemplateColumns: "minmax(0, 1fr) 340px",
           gridTemplateRows: "auto minmax(0, 1fr)",
         }}
       >
-        <header className="col-span-2 rounded-2xl border border-border bg-card flex items-center justify-between px-4 py-2.5 min-h-0">
+        <header className="col-span-2 rounded-2xl border border-border bg-card flex items-center justify-between px-4 py-2.5 min-h-0 gap-3 flex-wrap">
           <div className="flex items-baseline gap-3">
             <span className="text-[10px] uppercase tracking-[0.3em] text-muted-foreground">
               [route]
@@ -163,19 +237,16 @@ export default function MapView() {
             )}
           </div>
 
-          <div className="flex items-center gap-1.5">
-            <RangeChips
-              range={range}
-              setRange={setRange}
-              hasDate={!!queryDate}
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <DepotChip
+              depot={salary.depot}
+              onEdit={() => setDepotEditOpen(true)}
             />
-            <div className="w-px h-5 bg-border mx-1.5" />
-            <JobFilter
-              jobs={salary.jobs}
-              filter={filterJob}
-              setFilter={setFilterJob}
-            />
-            <div className="w-px h-5 bg-border mx-1.5" />
+            <div className="w-px h-5 bg-border mx-1" />
+            <RangeChips range={range} setRange={setRange} hasDate={!!queryDate} />
+            <div className="w-px h-5 bg-border mx-1" />
+            <JobFilter jobs={salary.jobs} filter={filterJob} setFilter={setFilterJob} />
+            <div className="w-px h-5 bg-border mx-1" />
             <button
               onClick={() => setShowRoute((s) => !s)}
               className={cn(
@@ -184,14 +255,26 @@ export default function MapView() {
                   ? "bg-primary text-primary-foreground border-primary"
                   : "border-border text-muted-foreground hover:text-foreground hover:bg-muted",
               )}
-              title="Показать соединительные линии"
+              title="История маршрута доставок"
             >
-              маршрут
+              история
             </button>
-            <div className="w-px h-5 bg-border mx-1.5" />
+            <button
+              onClick={() => setGpsEnabled((g) => !g)}
+              className={cn(
+                "h-7 px-2.5 text-[10px] font-medium uppercase tracking-[0.18em] rounded-md transition-colors border",
+                gpsEnabled
+                  ? "bg-blue-600 text-white border-blue-600"
+                  : "border-border text-muted-foreground hover:text-foreground hover:bg-muted",
+              )}
+              title={gpsStatus === "denied" ? "Нет разрешения на GPS" : "Показать моё местоположение"}
+            >
+              ◉ gps {gpsStatus === "watching" ? "вкл" : ""}
+            </button>
+            <div className="w-px h-5 bg-border mx-1" />
             <Link
               href="/"
-              className="h-7 px-3 text-[11px] font-medium uppercase tracking-[0.2em] text-foreground border border-border rounded-md hover:bg-muted transition-colors"
+              className="h-7 px-3 text-[11px] font-medium uppercase tracking-[0.2em] text-foreground border border-border rounded-md hover:bg-muted transition-colors flex items-center"
             >
               ← календарь
             </Link>
@@ -204,27 +287,26 @@ export default function MapView() {
             pending={deliveriesStore.pending}
             jobs={salary.jobs}
             theme={salary.theme}
+            depot={salary.depot}
+            userPosition={userPosition}
+            followUser={false}
             onMapClick={handleMapClick}
             onDeliveryClick={(id) => setSelectedId(id)}
             onPendingClick={(id) => setSelectedId(id)}
             selectedId={selectedId}
             flyTo={flyTo}
             showRoute={showRoute}
+            showPendingRoute={true}
           />
           <div className="absolute bottom-3 left-3 z-[400] pointer-events-none">
             <div className="rounded-md bg-background/85 backdrop-blur-sm border border-border px-2.5 py-1.5 text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-              <span>тапни по карте → новая точка</span>
+              <span>тапни по карте → новая точка · ⌂ — депо</span>
             </div>
           </div>
           <SearchBox
             onPick={(r) => {
               setFlyTo({ lat: r.lat, lng: r.lng, zoom: 16 });
-              setAddingPoint({
-                lat: r.lat,
-                lng: r.lng,
-                address: r.shortName,
-                mode: "delivery",
-              });
+              setAddingPoint({ lat: r.lat, lng: r.lng, address: r.shortName });
             }}
           />
         </div>
@@ -236,9 +318,14 @@ export default function MapView() {
           avgChek={avgChek}
           perKm={perKm}
           perJob={perJob}
+          pendingKm={pendingKm}
+          pendingPotentialRub={pendingPotentialRub}
           deliveries={sortedVisible}
           pending={deliveriesStore.pending}
           selectedId={selectedId}
+          shifts={salary.shifts}
+          onSetShiftActive={salary.setShiftActive}
+          isShiftActive={salary.isShiftActive}
           onSelect={(id, lat, lng) => {
             setSelectedId(id);
             setFlyTo({ lat, lng, zoom: 16 });
@@ -246,19 +333,17 @@ export default function MapView() {
           onRemoveDelivery={(id) => deliveriesStore.removeDelivery(id)}
           onRemovePending={(id) => deliveriesStore.removePending(id)}
           onCompletePending={(id, amount) => deliveriesStore.completePending(id, amount)}
-          onAddPendingFromAddress={(r, jobId) =>
-            deliveriesStore.addPending({
+          onAddPendingFromAddress={(r, jobId) => {
+            const job = salary.jobs.find((j) => j.id === jobId);
+            return deliveriesStore.addPending({
               jobId,
               lat: r.lat,
               lng: r.lng,
               address: r.shortName,
-            })
-          }
-          onOptimize={(startCoord) => {
-            const ordered = nearestNeighborRoute(startCoord, deliveriesStore.pending);
-            const refined = twoOptImprove(startCoord, ordered);
-            deliveriesStore.reorderPending(refined.map((p) => p.id));
+              priceRub: job?.perOrderRateRub,
+            });
           }}
+          onStartDriving={() => setDriving(true)}
         />
       </div>
 
@@ -282,18 +367,45 @@ export default function MapView() {
             setAddingPoint(null);
           }}
           onSubmitPending={(jobId) => {
+            const job = salary.jobs.find((j) => j.id === jobId);
             const p = deliveriesStore.addPending({
               jobId,
               lat: addingPoint.lat,
               lng: addingPoint.lng,
               address: addingPoint.address,
+              priceRub: job?.perOrderRateRub,
             });
             setSelectedId(p.id);
             setAddingPoint(null);
           }}
         />
       )}
+
+      {depotEditOpen && (
+        <DepotEditDialog
+          depot={salary.depot}
+          onCancel={() => setDepotEditOpen(false)}
+          onSubmit={(d) => {
+            salary.setDepot(d);
+            setDepotEditOpen(false);
+            setFlyTo({ lat: d.lat, lng: d.lng, zoom: 15 });
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+function DepotChip({ depot, onEdit }: { depot: Depot; onEdit: () => void }) {
+  return (
+    <button
+      onClick={onEdit}
+      className="h-7 px-2.5 text-[10px] font-medium uppercase tracking-[0.18em] rounded-md border border-border hover:bg-muted transition-colors flex items-center gap-1.5 max-w-[260px]"
+      title={`Депо: ${depot.address}`}
+    >
+      <span className="text-foreground">⌂ депо</span>
+      <span className="text-muted-foreground truncate">{depot.address}</span>
+    </button>
   );
 }
 
@@ -467,23 +579,32 @@ type SidebarProps = {
   avgChek: number;
   perKm: number;
   perJob: Record<string, { count: number; sum: number }>;
+  pendingKm: number;
+  pendingPotentialRub: number;
   deliveries: Delivery[];
   pending: PendingOrder[];
   selectedId: string | null;
+  shifts: Record<string, Partial<Record<JobId, boolean>>>;
+  onSetShiftActive: (dateIso: string, jobId: JobId, active: boolean) => void;
+  isShiftActive: (dateIso: string, jobId: JobId) => boolean;
   onSelect: (id: string, lat: number, lng: number) => void;
   onRemoveDelivery: (id: string) => void;
   onRemovePending: (id: string) => void;
   onCompletePending: (id: string, amount: number) => void;
   onAddPendingFromAddress: (r: GeocodeResult, jobId: JobId) => void;
-  onOptimize: (start: { lat: number; lng: number }) => void;
+  onStartDriving: () => void;
 };
 
 function Sidebar(props: SidebarProps) {
-  const [tab, setTab] = useState<"done" | "pending">("done");
+  const [tab, setTab] = useState<"pending" | "done">(
+    props.pending.length > 0 ? "pending" : "done",
+  );
+  const today = TODAY_ISO();
+  const jobsWithBonus = props.jobs.filter((j) => j.shiftBonusRub > 0);
 
   return (
     <div className="rounded-2xl border border-border bg-card overflow-hidden flex flex-col min-h-0">
-      <div className="px-4 py-3 border-b border-border space-y-2">
+      <div className="px-4 py-3 border-b border-border space-y-2.5">
         <div className="flex items-baseline justify-between">
           <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
             итого
@@ -497,15 +618,37 @@ function Sidebar(props: SidebarProps) {
           <Stat label="км" value={props.km > 0 ? props.km.toFixed(1) : "—"} />
           <Stat label="₽/км" value={props.perKm > 0 ? Math.round(props.perKm).toString() : "—"} />
         </div>
-        <div className="grid grid-cols-2 gap-2">
-          <Stat label="ср. чек" value={props.avgChek > 0 ? `${Math.round(props.avgChek)} ₽` : "—"} />
-          <Stat
-            label="ожидает"
-            value={props.pending.length.toString()}
-          />
-        </div>
+
+        {jobsWithBonus.length > 0 && (
+          <div className="space-y-1 pt-1">
+            <div className="text-[9px] uppercase tracking-[0.2em] text-muted-foreground">
+              смена сегодня
+            </div>
+            {jobsWithBonus.map((j) => {
+              const active = props.isShiftActive(today, j.id);
+              return (
+                <button
+                  key={j.id}
+                  onClick={() => props.onSetShiftActive(today, j.id, !active)}
+                  className={cn(
+                    "w-full h-8 rounded-md border text-[11px] font-medium uppercase tracking-[0.15em] transition-colors flex items-center justify-between px-2.5",
+                    active
+                      ? "bg-foreground text-background border-foreground"
+                      : "border-border text-muted-foreground hover:text-foreground hover:bg-muted",
+                  )}
+                >
+                  <span>
+                    {active ? "✓" : "○"} {j.label}
+                  </span>
+                  <span className="tabular-nums">+{j.shiftBonusRub} ₽</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
         {Object.keys(props.perJob).length > 0 && (
-          <div className="pt-1.5 space-y-1">
+          <div className="pt-1 space-y-1">
             {Object.entries(props.perJob).map(([jobId, v]) => {
               const job = props.jobs.find((j) => j.id === jobId);
               return (
@@ -524,32 +667,34 @@ function Sidebar(props: SidebarProps) {
       </div>
 
       <div className="flex border-b border-border shrink-0">
-        <TabButton active={tab === "done"} onClick={() => setTab("done")}>
-          доставлено · {props.deliveries.length}
-        </TabButton>
         <TabButton active={tab === "pending"} onClick={() => setTab("pending")}>
-          ожидает · {props.pending.length}
+          маршрут · {props.pending.length}
+        </TabButton>
+        <TabButton active={tab === "done"} onClick={() => setTab("done")}>
+          готово · {props.deliveries.length}
         </TabButton>
       </div>
 
-      {tab === "done" ? (
+      {tab === "pending" ? (
+        <PendingList
+          pending={props.pending}
+          jobs={props.jobs}
+          selectedId={props.selectedId}
+          pendingKm={props.pendingKm}
+          pendingPotentialRub={props.pendingPotentialRub}
+          onSelect={props.onSelect}
+          onRemove={props.onRemovePending}
+          onComplete={props.onCompletePending}
+          onAdd={props.onAddPendingFromAddress}
+          onStartDriving={props.onStartDriving}
+        />
+      ) : (
         <DeliveriesList
           deliveries={props.deliveries}
           jobs={props.jobs}
           selectedId={props.selectedId}
           onSelect={props.onSelect}
           onRemove={props.onRemoveDelivery}
-        />
-      ) : (
-        <PendingList
-          pending={props.pending}
-          jobs={props.jobs}
-          selectedId={props.selectedId}
-          onSelect={props.onSelect}
-          onRemove={props.onRemovePending}
-          onComplete={props.onCompletePending}
-          onAdd={props.onAddPendingFromAddress}
-          onOptimize={props.onOptimize}
         />
       )}
     </div>
@@ -668,20 +813,24 @@ function PendingList({
   pending,
   jobs,
   selectedId,
+  pendingKm,
+  pendingPotentialRub,
   onSelect,
   onRemove,
   onComplete,
   onAdd,
-  onOptimize,
+  onStartDriving,
 }: {
   pending: PendingOrder[];
   jobs: ResolvedJob[];
   selectedId: string | null;
+  pendingKm: number;
+  pendingPotentialRub: number;
   onSelect: (id: string, lat: number, lng: number) => void;
   onRemove: (id: string) => void;
   onComplete: (id: string, amount: number) => void;
   onAdd: (r: GeocodeResult, jobId: JobId) => void;
-  onOptimize: (start: { lat: number; lng: number }) => void;
+  onStartDriving: () => void;
 }) {
   const jobMap = new Map(jobs.map((j) => [j.id, j]));
   const [completing, setCompleting] = useState<{ id: string; value: string } | null>(null);
@@ -713,8 +862,6 @@ function PendingList({
     };
   }, [adding.q]);
 
-  const start = pending[0] ? { lat: pending[0].lat, lng: pending[0].lng } : null;
-
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <div className="px-4 py-2.5 border-b border-border space-y-2 shrink-0">
@@ -722,13 +869,13 @@ function PendingList({
           <input
             value={adding.q}
             onChange={(e) => setAdding((s) => ({ ...s, q: e.target.value }))}
-            placeholder="адрес заказа…"
-            className="flex-1 h-8 px-2.5 rounded-md border border-border bg-background text-[11px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-foreground/40"
+            placeholder="вписать адрес заказа…"
+            className="flex-1 h-9 px-2.5 rounded-md border border-border bg-background text-[12px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-foreground/40"
           />
           <select
             value={adding.jobId}
             onChange={(e) => setAdding((s) => ({ ...s, jobId: e.target.value as JobId }))}
-            className="h-8 px-2 rounded-md border border-border bg-background text-[11px] text-foreground focus:outline-none focus:border-foreground/40"
+            className="h-9 px-2 rounded-md border border-border bg-background text-[11px] text-foreground focus:outline-none focus:border-foreground/40"
           >
             {jobs.map((j) => (
               <option key={j.id} value={j.id}>
@@ -766,24 +913,36 @@ function PendingList({
             ))}
           </div>
         )}
-        {pending.length >= 2 && start && (
-          <button
-            onClick={() => onOptimize(start)}
-            className="w-full h-8 rounded-md border border-border text-[10px] font-medium uppercase tracking-[0.18em] text-foreground hover:bg-muted transition-colors"
-            title="Перестроить порядок объезда от первой точки методом ближайшего соседа + 2-opt"
-          >
-            ▤ оптимизировать маршрут
-          </button>
+
+        {pending.length >= 1 && (
+          <>
+            <div className="grid grid-cols-2 gap-2">
+              <Stat
+                label="маршрут"
+                value={pendingKm > 0 ? `${pendingKm.toFixed(1)} км` : "—"}
+              />
+              <Stat
+                label="заработок"
+                value={pendingPotentialRub > 0 ? `${pendingPotentialRub} ₽` : "—"}
+              />
+            </div>
+            <button
+              onClick={onStartDriving}
+              className="w-full h-12 rounded-md bg-primary text-primary-foreground text-[13px] font-semibold uppercase tracking-[0.2em] active:scale-[0.98] transition-transform"
+            >
+              ▶ поехали
+            </button>
+          </>
         )}
       </div>
 
       {pending.length === 0 ? (
         <div className="flex-1 flex items-center justify-center px-6 text-center">
           <div className="text-[11px] text-muted-foreground leading-relaxed">
-            добавь ожидающие заказы
+            добавь адреса заказов
             <br />
             <span className="text-muted-foreground/70 text-[10px]">
-              чтобы построить маршрут
+              маршрут построится автоматически от депо
             </span>
           </div>
         </div>
@@ -792,24 +951,30 @@ function PendingList({
           {pending.map((p, i) => {
             const job = jobMap.get(p.jobId);
             const isCompleting = completing?.id === p.id;
-            const distFromPrev =
-              i > 0
-                ? haversineKm(
-                    { lat: pending[i - 1].lat, lng: pending[i - 1].lng },
-                    { lat: p.lat, lng: p.lng },
-                  )
-                : 0;
+            const prev =
+              i === 0
+                ? null
+                : { lat: pending[i - 1].lat, lng: pending[i - 1].lng };
+            const distFromPrev = prev
+              ? haversineKm(prev, { lat: p.lat, lng: p.lng })
+              : 0;
             return (
               <li
                 key={p.id}
                 className={cn(
                   "px-4 py-2.5 flex items-start gap-3 hover-elevate group cursor-pointer",
                   selectedId === p.id && "bg-foreground/[0.04]",
+                  i === 0 && "bg-foreground/[0.02]",
                 )}
                 onClick={() => onSelect(p.id, p.lat, p.lng)}
               >
-                <span className="text-[10px] tabular-nums text-muted-foreground w-5 mt-0.5">
-                  {String(i + 1).padStart(2, "0")}
+                <span
+                  className={cn(
+                    "text-[11px] tabular-nums w-5 mt-0.5 font-semibold",
+                    i === 0 ? "text-foreground" : "text-muted-foreground",
+                  )}
+                >
+                  {i + 1}
                 </span>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-baseline justify-between gap-2">
@@ -819,6 +984,7 @@ function PendingList({
                     <span className="text-[10px] text-muted-foreground tabular-nums shrink-0">
                       {job?.short}
                       {i > 0 && <> · {distFromPrev.toFixed(1)} км</>}
+                      {i === 0 && <> · от депо</>}
                     </span>
                   </div>
                   {isCompleting ? (
@@ -865,7 +1031,11 @@ function PendingList({
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
-                          setCompleting({ id: p.id, value: "" });
+                          const rate = p.priceRub ?? job?.perOrderRateRub ?? 0;
+                          setCompleting({
+                            id: p.id,
+                            value: rate > 0 ? String(rate) : "",
+                          });
                         }}
                         className="text-[10px] uppercase tracking-[0.18em] text-foreground hover:text-foreground/80"
                       >
@@ -910,8 +1080,20 @@ function AddDeliveryDialog({
   onSubmitDelivery: (jobId: JobId, amount: number) => void;
   onSubmitPending: (jobId: JobId) => void;
 }) {
-  const [jobId, setJobId] = useState<JobId>(jobs[0]?.id || "ozon");
-  const [amount, setAmount] = useState("");
+  const initialJob = jobs[0]?.id || "ozon";
+  const [jobId, setJobId] = useState<JobId>(initialJob);
+  const initialJobObj = jobs.find((j) => j.id === initialJob);
+  const [amount, setAmount] = useState(
+    initialJobObj && initialJobObj.perOrderRateRub > 0
+      ? String(initialJobObj.perOrderRateRub)
+      : "",
+  );
+
+  // re-fill amount default when job changes
+  useEffect(() => {
+    const job = jobs.find((j) => j.id === jobId);
+    if (job && job.perOrderRateRub > 0) setAmount(String(job.perOrderRateRub));
+  }, [jobId, jobs]);
 
   return (
     <div
@@ -919,7 +1101,7 @@ function AddDeliveryDialog({
       onClick={onCancel}
     >
       <div
-        className="rounded-2xl border border-border bg-card w-full max-w-[380px] p-4 space-y-3"
+        className="rounded-2xl border border-border bg-card w-full max-w-[400px] p-4 space-y-3"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between">
@@ -955,6 +1137,18 @@ function AddDeliveryDialog({
           ))}
         </div>
 
+        <button
+          type="button"
+          onClick={() => onSubmitPending(jobId)}
+          className="w-full h-11 rounded-md bg-primary text-primary-foreground text-[12px] font-semibold uppercase tracking-[0.2em]"
+        >
+          + в маршрут
+        </button>
+
+        <div className="text-[9px] uppercase tracking-[0.25em] text-muted-foreground text-center pt-1">
+          или сразу отметить как доставленное
+        </div>
+
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -962,11 +1156,9 @@ function AddDeliveryDialog({
             if (!Number.isFinite(v) || v <= 0) return;
             onSubmitDelivery(jobId, v);
           }}
-          className="space-y-2"
         >
           <div className="flex items-center gap-2">
             <input
-              autoFocus
               inputMode="numeric"
               pattern="[0-9]*"
               value={amount}
@@ -977,20 +1169,113 @@ function AddDeliveryDialog({
             <button
               type="submit"
               disabled={!amount || Number(amount) <= 0}
-              className="h-10 px-4 rounded-md bg-primary text-primary-foreground text-[11px] font-medium uppercase tracking-[0.2em] disabled:opacity-40 disabled:cursor-not-allowed"
+              className="h-10 px-4 rounded-md border border-border text-[11px] font-medium uppercase tracking-[0.2em] text-foreground hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              доставлено
+              ✓ доставлено
             </button>
           </div>
-
-          <button
-            type="button"
-            onClick={() => onSubmitPending(jobId)}
-            className="w-full h-9 rounded-md border border-border text-[10px] font-medium uppercase tracking-[0.2em] text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-          >
-            или · в ожидающие
-          </button>
         </form>
+      </div>
+    </div>
+  );
+}
+
+function DepotEditDialog({
+  depot,
+  onCancel,
+  onSubmit,
+}: {
+  depot: Depot;
+  onCancel: () => void;
+  onSubmit: (d: Partial<Depot>) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<GeocodeResult[]>([]);
+  const [loading, setLoading] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    if (query.trim().length < 3) {
+      setResults([]);
+      return;
+    }
+    if (abortRef.current) abortRef.current.abort();
+    const c = new AbortController();
+    abortRef.current = c;
+    setLoading(true);
+    const t = setTimeout(() => {
+      searchAddress(query, c.signal)
+        .then((r) => setResults(r))
+        .catch(() => {})
+        .finally(() => setLoading(false));
+    }, 350);
+    return () => {
+      clearTimeout(t);
+      c.abort();
+    };
+  }, [query]);
+
+  return (
+    <div
+      className="fixed inset-0 z-[1000] bg-black/70 flex items-center justify-center p-4"
+      onClick={onCancel}
+    >
+      <div
+        className="rounded-2xl border border-border bg-card w-full max-w-[420px] p-4 space-y-3"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] uppercase tracking-[0.25em] text-muted-foreground">
+            ⌂ депо · откуда стартуешь
+          </span>
+          <button
+            onClick={onCancel}
+            className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground hover:text-foreground"
+          >
+            закрыть
+          </button>
+        </div>
+        <div className="rounded-md border border-border px-3 py-2 text-[11px]">
+          <div className="text-muted-foreground text-[9px] uppercase tracking-[0.2em]">
+            сейчас
+          </div>
+          <div className="text-foreground">{depot.address}</div>
+        </div>
+        <input
+          autoFocus
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="новый адрес производства…"
+          className="w-full h-10 px-3 rounded-md border border-border bg-background text-[12px] focus:outline-none focus:border-foreground/40"
+        />
+        {(results.length > 0 || loading) && (
+          <div className="rounded-md border border-border max-h-[260px] overflow-y-auto bg-popover">
+            {loading && (
+              <div className="px-3 py-2 text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+                ищу…
+              </div>
+            )}
+            {!loading &&
+              results.map((r, i) => (
+                <button
+                  key={i}
+                  onClick={() =>
+                    onSubmit({
+                      lat: r.lat,
+                      lng: r.lng,
+                      address: r.shortName,
+                    })
+                  }
+                  className="w-full text-left px-3 py-2 text-[11px] hover:bg-muted transition-colors border-b border-border last:border-b-0"
+                >
+                  <div className="text-foreground truncate">{r.shortName}</div>
+                  <div className="text-[10px] text-muted-foreground truncate">
+                    {r.displayName}
+                  </div>
+                </button>
+              ))}
+          </div>
+        )}
       </div>
     </div>
   );
