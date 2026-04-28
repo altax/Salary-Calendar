@@ -34,7 +34,7 @@ import {
   type RouteProfile,
 } from "@/lib/routing";
 import L from "leaflet";
-import DeliveryMap from "@/components/DeliveryMap";
+import DeliveryMap, { type MapLayerMode } from "@/components/DeliveryMap";
 import DriveMode from "@/components/DriveMode";
 import { cn } from "@/lib/utils";
 
@@ -117,6 +117,22 @@ export default function MapView() {
   const [driving, setDriving] = useState(false);
   const [depotEditOpen, setDepotEditOpen] = useState(false);
   const mapRef = useRef<L.Map | null>(null);
+  const [layerMode, setLayerMode] = useState<MapLayerMode>(() => {
+    return (localStorage.getItem("map-layer") as MapLayerMode) || "default";
+  });
+
+  const cycleLayer = () => {
+    const next: MapLayerMode = layerMode === "default" ? "detail" : layerMode === "detail" ? "satellite" : "default";
+    setLayerMode(next);
+    localStorage.setItem("map-layer", next);
+  };
+
+  const LAYER_LABEL: Record<MapLayerMode, string> = { default: "🗺", detail: "🏙", satellite: "🛰" };
+  const LAYER_TITLE: Record<MapLayerMode, string> = {
+    default: "Стиль: тёмная/светлая карта",
+    detail: "Стиль: детальная OSM (подъезды, все улицы)",
+    satellite: "Стиль: спутник + подписи",
+  };
 
   const { position: userPosition, status: gpsStatus } = useGeolocation(gpsEnabled);
 
@@ -375,6 +391,11 @@ export default function MapView() {
         onSaveDeliveryRoute={(g, dM, dS) => wavesStore.saveDeliveryRoute(g, dM, dS)}
         onSaveReturnRoute={(g, dM, dS) => wavesStore.saveReturnRoute(g, dM, dS)}
         onFinishWave={() => wavesStore.finishActiveWave()}
+        layerMode={layerMode}
+        onLayerChange={(next) => {
+          setLayerMode(next);
+          localStorage.setItem("map-layer", next);
+        }}
       />
     );
   }
@@ -466,14 +487,20 @@ export default function MapView() {
             showRoute={showRoute}
             showPendingRoute={!isViewingFinishedWave}
             onMapReady={(m) => { mapRef.current = m; }}
+            layerMode={layerMode}
             pendingRouteGeometry={
               isViewingFinishedWave
                 ? visibleWave?.delivery?.geometry ?? null
                 : pendingRoute.route?.geometry ?? null
             }
           />
-          {/* Zoom controls */}
+          {/* Zoom + layer controls */}
           <div className="absolute bottom-12 left-3 z-[500] flex flex-col gap-1">
+            <button
+              onClick={cycleLayer}
+              className="w-8 h-8 rounded-md border border-border bg-card/95 backdrop-blur text-[13px] flex items-center justify-center shadow hover:bg-muted transition-colors"
+              title={LAYER_TITLE[layerMode]}
+            >{LAYER_LABEL[layerMode]}</button>
             <button
               onClick={() => mapRef.current?.zoomIn()}
               className="w-8 h-8 rounded-md border border-border bg-card/95 backdrop-blur text-[16px] font-bold flex items-center justify-center shadow hover:bg-muted transition-colors leading-none"

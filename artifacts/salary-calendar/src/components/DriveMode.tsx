@@ -6,6 +6,7 @@ import type { Depot, ResolvedJob } from "@/lib/store";
 import DeliveryMap, {
   type ManeuverMarker,
   type RouteLegSegment,
+  type MapLayerMode,
 } from "@/components/DeliveryMap";
 import { useRoute } from "@/lib/use-route";
 import {
@@ -52,6 +53,8 @@ export type DriveModeProps = {
     durationS: number,
   ) => void;
   onFinishWave?: () => void;
+  layerMode?: MapLayerMode;
+  onLayerChange?: (mode: MapLayerMode) => void;
 };
 
 const ARRIVAL_RADIUS_M = 30;
@@ -141,6 +144,8 @@ export default function DriveMode({
   onSaveDeliveryRoute,
   onSaveReturnRoute,
   onFinishWave,
+  layerMode = "default",
+  onLayerChange,
 }: DriveModeProps) {
   // GPS simulator state. When `simEnabled` is true we ignore the real device
   // GPS and synthesize positions by walking the current route geometry. This
@@ -1105,14 +1110,27 @@ export default function DriveMode({
           showRouteOverlay={routeVisible}
           autoZoomBack={!!position}
           onMapReady={(m) => { mapRef.current = m; }}
+          layerMode={layerMode}
           bearing={
             courseUp && (mode === "driving" || mode === "returning")
               ? smoothedHeading
               : null
           }
         />
-        {/* Zoom buttons — work even when course-up CSS rotation is active */}
+        {/* Zoom + layer buttons */}
         <div className="absolute bottom-16 left-3 z-[1200] flex flex-col gap-1.5 pointer-events-auto">
+          {onLayerChange && (
+            <button
+              onClick={() => {
+                const next: MapLayerMode = layerMode === "default" ? "detail" : layerMode === "detail" ? "satellite" : "default";
+                onLayerChange(next);
+              }}
+              className="w-9 h-9 rounded-md border border-border bg-card/95 backdrop-blur text-[14px] flex items-center justify-center shadow-md hover:bg-muted transition-colors"
+              title={layerMode === "default" ? "Стиль: карта" : layerMode === "detail" ? "Стиль: детальная OSM" : "Стиль: спутник"}
+            >
+              {layerMode === "default" ? "🗺" : layerMode === "detail" ? "🏙" : "🛰"}
+            </button>
+          )}
           <button
             onClick={() => mapRef.current?.zoomIn()}
             className="w-9 h-9 rounded-md border border-border bg-card/95 backdrop-blur text-[18px] font-bold flex items-center justify-center shadow-md hover:bg-muted transition-colors leading-none"

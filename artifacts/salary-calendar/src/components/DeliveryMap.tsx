@@ -26,8 +26,16 @@ const LIGHT_TILES =
 const LIGHT_LABELS =
   "https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png";
 
+const OSM_TILES = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
+const SAT_TILES =
+  "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}";
+
 const TILE_ATTR =
   '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>';
+const OSM_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+const SAT_ATTR = 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community';
+
+export type MapLayerMode = "default" | "detail" | "satellite";
 
 function jobColor(job: ResolvedJob | undefined, theme: "dark" | "light"): string {
   if (job?.color) return job.color;
@@ -250,8 +258,8 @@ function AutoZoomBack({ userPosition }: { userPosition: { lat: number; lng: numb
     zoomstart() {
       if (timerRef.current) window.clearTimeout(timerRef.current);
       timerRef.current = window.setTimeout(() => {
-        if (map.getZoom() < 15) {
-          map.flyTo([userPosition.lat, userPosition.lng], 16, { duration: 1.2, animate: true });
+        if (map.getZoom() < 16) {
+          map.flyTo([userPosition.lat, userPosition.lng], 18, { duration: 1.2, animate: true });
         }
       }, 5000);
     },
@@ -279,7 +287,7 @@ function FlyTo({ target }: { target: { lat: number; lng: number; zoom?: number }
   const map = useMap();
   useEffect(() => {
     if (!target) return;
-    map.flyTo([target.lat, target.lng], target.zoom ?? Math.max(map.getZoom(), 15), {
+    map.flyTo([target.lat, target.lng], target.zoom ?? Math.max(map.getZoom(), 17), {
       duration: 0.8,
     });
   }, [target, map]);
@@ -295,7 +303,7 @@ function FitBounds({ points, animate = true }: { points: { lat: number; lng: num
     if (key === lastKey.current) return;
     lastKey.current = key;
     const bounds = L.latLngBounds(points.map((p) => [p.lat, p.lng] as [number, number]));
-    map.fitBounds(bounds, { padding: [60, 60], maxZoom: 15, animate });
+    map.fitBounds(bounds, { padding: [60, 60], maxZoom: 17, animate });
   }, [points, map, animate]);
   return null;
 }
@@ -304,7 +312,7 @@ function FollowUser({ position }: { position: GeoPosition | null }) {
   const map = useMap();
   useEffect(() => {
     if (!position) return;
-    map.setView([position.lat, position.lng], Math.max(map.getZoom(), 16), {
+    map.setView([position.lat, position.lng], Math.max(map.getZoom(), 18), {
       animate: true,
     });
   }, [position?.lat, position?.lng]);
@@ -363,6 +371,7 @@ export type DeliveryMapProps = {
   bearing?: number | null;
   autoZoomBack?: boolean;
   onMapReady?: (map: L.Map) => void;
+  layerMode?: MapLayerMode;
 };
 
 export default function DeliveryMap({
@@ -397,6 +406,7 @@ export default function DeliveryMap({
   bearing = null,
   autoZoomBack = false,
   onMapReady,
+  layerMode = "default",
 }: DeliveryMapProps) {
   const sortedDeliveries = useMemo(
     () =>
@@ -502,6 +512,7 @@ export default function DeliveryMap({
       <MapContainer
         center={depot ? [depot.lat, depot.lng] : SPB_CENTER}
         zoom={initialZoom}
+        maxZoom={19}
         scrollWheelZoom={interactive && !rotated}
         zoomControl={false}
         dragging={interactive && !rotated}
@@ -510,8 +521,19 @@ export default function DeliveryMap({
         attributionControl={false}
         style={{ height: "100%", width: "100%", background: theme === "dark" ? "#0a0a0a" : "#f5f5f5" }}
       >
-        <TileLayer url={theme === "dark" ? DARK_TILES : LIGHT_TILES} attribution={TILE_ATTR} />
-        <TileLayer url={theme === "dark" ? DARK_LABELS : LIGHT_LABELS} />
+        {layerMode === "satellite" ? (
+          <>
+            <TileLayer url={SAT_TILES} attribution={SAT_ATTR} maxZoom={19} />
+            <TileLayer url={theme === "dark" ? DARK_LABELS : LIGHT_LABELS} opacity={0.85} />
+          </>
+        ) : layerMode === "detail" ? (
+          <TileLayer url={OSM_TILES} attribution={OSM_ATTR} maxZoom={19} />
+        ) : (
+          <>
+            <TileLayer url={theme === "dark" ? DARK_TILES : LIGHT_TILES} attribution={TILE_ATTR} />
+            <TileLayer url={theme === "dark" ? DARK_LABELS : LIGHT_LABELS} />
+          </>
+        )}
         {interactive && onMapClick && <ClickHandler onClick={onMapClick} />}
         <FlyTo target={flyTo ?? null} />
         {fitToAll && <FitBounds points={fitPoints} />}
