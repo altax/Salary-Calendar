@@ -36,6 +36,17 @@ export type DriveModeProps = {
   onExit: () => void;
   onCompleteStop: (id: string, amountRub: number) => void;
   onSkipStop: (id: string) => void;
+  onSaveDeliveryRoute?: (
+    geometry: [number, number][],
+    distanceM: number,
+    durationS: number,
+  ) => void;
+  onSaveReturnRoute?: (
+    geometry: [number, number][],
+    distanceM: number,
+    durationS: number,
+  ) => void;
+  onFinishWave?: () => void;
 };
 
 const ARRIVAL_RADIUS_M = 30;
@@ -108,6 +119,9 @@ export default function DriveMode({
   onExit,
   onCompleteStop,
   onSkipStop,
+  onSaveDeliveryRoute,
+  onSaveReturnRoute,
+  onFinishWave,
 }: DriveModeProps) {
   const { position, status, error } = useGeolocation(true);
   const [completing, setCompleting] = useState<{ id: string; value: string } | null>(null);
@@ -208,7 +222,7 @@ export default function DriveMode({
 
   const route = useRoute(routeRequest?.points ?? null);
 
-  // Announce route built once
+  // Announce route built once + persist into the wave snapshot
   useEffect(() => {
     if (!route.route || !routeRequest) return;
     const id = `${routeRequest.builtAt}:${routeRequest.kind}`;
@@ -221,13 +235,24 @@ export default function DriveMode({
         route.route.duration,
         pending.length,
       );
+      onSaveDeliveryRoute?.(
+        route.route.geometry,
+        route.route.distance,
+        route.route.duration,
+      );
+    } else if (routeRequest.kind === "return") {
+      onSaveReturnRoute?.(
+        route.route.geometry,
+        route.route.distance,
+        route.route.duration,
+      );
     }
     announcerRef.current.reset();
     stopAnnouncerRef.current.reset();
     lastSegmentRef.current = undefined;
     arrivalAnnouncedRef.current = false;
     arrivalTriggeredRef.current = null;
-  }, [route.route, routeRequest?.builtAt, routeRequest?.kind, pending.length]);
+  }, [route.route, routeRequest?.builtAt, routeRequest?.kind, pending.length, onSaveDeliveryRoute, onSaveReturnRoute]);
 
   const routeIndex = useMemo(() => {
     if (!route.route) return null;
@@ -448,6 +473,7 @@ export default function DriveMode({
         finishAnnouncedRef.current = true;
         announceShiftFinished(voice);
         setMode("finished");
+        onFinishWave?.();
       }
     }
   }, [
@@ -908,6 +934,7 @@ export default function DriveMode({
                 finishAnnouncedRef.current = true;
                 announceShiftFinished(voiceRef.current);
                 setMode("finished");
+                onFinishWave?.();
               }}
               className="w-full h-12 rounded-md border border-border text-[11px] uppercase tracking-[0.2em] text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
             >

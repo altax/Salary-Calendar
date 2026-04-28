@@ -13,4 +13,11 @@ import "./index.css";
   }
 })();
 
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    const swUrl = `${import.meta.env.BASE_URL || "/"}sw.js`.replace("//", "/");
+    navigator.serviceWorker.register(swUrl).catch(() => {});
+  });
+}
+
 createRoot(document.getElementById("root")!).render(<App />);

@@ -15,6 +15,12 @@ import {
   type Delivery,
   type PendingOrder,
 } from "@/lib/deliveries";
+import {
+  useWavesStore,
+  pendingStops,
+  type Wave,
+  type WaveStop,
+} from "@/lib/waves";
 import { searchAddress, reverseGeocode, type GeocodeResult } from "@/lib/geocode";
 import {
   nearestNeighborRoute,
@@ -82,6 +88,20 @@ export default function MapView() {
   );
 
   const deliveriesStore = useDeliveriesStore(onDeliveryDelta);
+  const wavesStore = useWavesStore(salary.depot);
+
+  // The pending list = pending stops of the ACTIVE wave (the one being filled
+  // / driven). Selecting a finished wave does NOT change what's pending.
+  const pending: WaveStop[] = useMemo(
+    () => pendingStops(wavesStore.activeWave),
+    [wavesStore.activeWave],
+  );
+
+  // Wave shown on the map: active by default, or a finished one if the user
+  // opened its tab. Used to render historical route geometry.
+  const visibleWave = wavesStore.visibleWave;
+  const isViewingFinishedWave =
+    !!visibleWave && !!visibleWave.finishedAt && visibleWave.id !== wavesStore.activeWave?.id;
 
   const [range, setRange] = useState<RangeKey>(queryDate ? "date" : "all");
   const [filterJob, setFilterJob] = useState<string | null>(null);
@@ -100,52 +120,57 @@ export default function MapView() {
 
   // Auto-optimize pending list from depot whenever pending IDs change.
   const pendingIdsKey = useMemo(
-    () =>
-      deliveriesStore.pending
-        .map((p) => p.id)
-        .slice()
-        .sort()
-        .join(","),
-    [deliveriesStore.pending],
+    () => pending.map((p) => p.id).slice().sort().join(","),
+    [pending],
   );
 
   // Real road distance matrix from depot through all pending stops.
   const matrixPoints = useMemo(() => {
-    if (deliveriesStore.pending.length < 2) return null;
+    if (pending.length < 2) return null;
     return [
       { id: "__start__", lat: salary.depot.lat, lng: salary.depot.lng },
-      ...deliveriesStore.pending.map((p) => ({ id: p.id, lat: p.lat, lng: p.lng })),
+      ...pending.map((p) => ({ id: p.id, lat: p.lat, lng: p.lng })),
     ];
-  }, [deliveriesStore.pending, salary.depot.lat, salary.depot.lng]);
+  }, [pending, salary.depot.lat, salary.depot.lng]);
 
   const matrix = useDistanceMatrix(matrixPoints);
 
   useEffect(() => {
-    if (deliveriesStore.pending.length < 2) return;
+    if (pending.length < 2) return;
     const start = { lat: salary.depot.lat, lng: salary.depot.lng };
     const dist = matrix.durations
       ? makeMatrixDistFn(matrix.ids, matrix.durations)
       : undefined;
-    const ordered = nearestNeighborRoute(start, deliveriesStore.pending, dist);
+    const ordered = nearestNeighborRoute(start, pending, dist);
     const refined = twoOptImprove(start, ordered, 50, dist);
     const newOrder = refined.map((p) => p.id);
-    const curOrder = deliveriesStore.pending.map((p) => p.id);
+    const curOrder = pending.map((p) => p.id);
     if (newOrder.join("|") !== curOrder.join("|")) {
-      deliveriesStore.reorderPending(newOrder);
+      wavesStore.reorderStops(newOrder);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingIdsKey, salary.depot.lat, salary.depot.lng, matrix.durations]);
 
-  // Real road geometry for the planned pending route (depot → all stops).
+  // Real road geometry for the planned pending route (depot → all stops) of
+  // the active wave. Always fetched while the active wave has pending stops.
   const pendingRoutePoints = useMemo(() => {
-    if (deliveriesStore.pending.length === 0) return null;
+    if (pending.length === 0) return null;
     return [
       { lat: salary.depot.lat, lng: salary.depot.lng },
-      ...deliveriesStore.pending.map((p) => ({ lat: p.lat, lng: p.lng })),
+      ...pending.map((p) => ({ lat: p.lat, lng: p.lng })),
     ];
-  }, [deliveriesStore.pending, salary.depot.lat, salary.depot.lng]);
+  }, [pending, salary.depot.lat, salary.depot.lng]);
 
   const pendingRoute = useRoute(pendingRoutePoints);
+
+  // Persist the active wave's planned route geometry so it survives reload
+  // and remains viewable as a finished wave.
+  useEffect(() => {
+    const r = pendingRoute.route;
+    if (!r || !wavesStore.activeWave || pending.length === 0) return;
+    wavesStore.saveDeliveryRoute(r.geometry, r.distance, r.duration);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingRoute.route]);
 
   const visibleDeliveries = useMemo(
     () =>
@@ -184,24 +209,59 @@ export default function MapView() {
 
   // Pending route metrics (from depot through ordered stops)
   const pendingKm = useMemo(() => {
-    if (deliveriesStore.pending.length === 0) return 0;
+    if (pending.length === 0) return 0;
     if (pendingRoute.route) return pendingRoute.route.distance / 1000;
     const points = [
       { lat: salary.depot.lat, lng: salary.depot.lng },
-      ...deliveriesStore.pending.map((p) => ({ lat: p.lat, lng: p.lng })),
+      ...pending.map((p) => ({ lat: p.lat, lng: p.lng })),
     ];
     return totalRouteKm(points);
-  }, [deliveriesStore.pending, salary.depot, pendingRoute.route]);
+  }, [pending, salary.depot, pendingRoute.route]);
 
   const pendingPotentialRub = useMemo(() => {
     let sum = 0;
-    for (const p of deliveriesStore.pending) {
+    for (const p of pending) {
       const job = salary.jobs.find((j) => j.id === p.jobId);
       const rate = p.priceRub ?? job?.perOrderRateRub ?? 0;
       sum += rate;
     }
     return sum;
-  }, [deliveriesStore.pending, salary.jobs]);
+  }, [pending, salary.jobs]);
+
+  // Bridge: complete a pending stop → write to delivery history AND mark
+  // the wave's stop as delivered (so calendar earnings stay correct).
+  const completePendingStop = useCallback(
+    (id: string, amount: number) => {
+      const target = pending.find((p) => p.id === id);
+      if (!target) return;
+      const d = deliveriesStore.addDelivery({
+        jobId: target.jobId,
+        amountRub: amount,
+        lat: target.lat,
+        lng: target.lng,
+        address: target.address,
+        timestamp: Date.now(),
+      });
+      wavesStore.completeStop(id, amount, d.id);
+    },
+    [pending, deliveriesStore, wavesStore],
+  );
+
+  // Translate a wave's pending stop into the legacy PendingOrder shape used
+  // throughout the existing UI components without changing their signatures.
+  const pendingForUi: PendingOrder[] = useMemo(
+    () =>
+      pending.map((s) => ({
+        id: s.id,
+        jobId: s.jobId,
+        lat: s.lat,
+        lng: s.lng,
+        address: s.address,
+        priceRub: s.priceRub,
+        createdAt: s.createdAt,
+      })),
+    [pending],
+  );
 
   const [addingPoint, setAddingPoint] = useState<{
     lat: number;
@@ -226,20 +286,23 @@ export default function MapView() {
   if (driving) {
     return (
       <DriveMode
-        pending={deliveriesStore.pending}
+        pending={pendingForUi}
         jobs={salary.jobs}
         depot={salary.depot}
         theme={salary.theme}
         onExit={() => setDriving(false)}
         onCompleteStop={(id, amount) => {
-          deliveriesStore.completePending(id, amount);
+          completePendingStop(id, amount);
         }}
         onSkipStop={(id) => {
-          // move to end of queue
-          const ids = deliveriesStore.pending.map((p) => p.id);
+          // move to end of queue (keeps stop in active wave)
+          const ids = pending.map((p) => p.id);
           const next = ids.filter((x) => x !== id).concat([id]);
-          deliveriesStore.reorderPending(next);
+          wavesStore.reorderStops(next);
         }}
+        onSaveDeliveryRoute={(g, dM, dS) => wavesStore.saveDeliveryRoute(g, dM, dS)}
+        onSaveReturnRoute={(g, dM, dS) => wavesStore.saveReturnRoute(g, dM, dS)}
+        onFinishWave={() => wavesStore.finishActiveWave()}
       />
     );
   }
@@ -314,21 +377,45 @@ export default function MapView() {
 
         <div className="rounded-2xl border border-border bg-card overflow-hidden relative">
           <DeliveryMap
-            deliveries={visibleDeliveries}
-            pending={deliveriesStore.pending}
+            deliveries={
+              isViewingFinishedWave
+                ? // When viewing a finished wave, hide unrelated history points
+                  visibleDeliveries.filter(
+                    (d) =>
+                      !!visibleWave?.stops.find(
+                        (s) => s.deliveryId === d.id || (s.lat === d.lat && s.lng === d.lng),
+                      ),
+                  )
+                : visibleDeliveries
+            }
+            pending={isViewingFinishedWave ? [] : pendingForUi}
             jobs={salary.jobs}
             theme={salary.theme}
             depot={salary.depot}
             userPosition={userPosition}
             followUser={false}
-            onMapClick={handleMapClick}
+            onMapClick={isViewingFinishedWave ? undefined : handleMapClick}
             onDeliveryClick={(id) => setSelectedId(id)}
             onPendingClick={(id) => setSelectedId(id)}
             selectedId={selectedId}
             flyTo={flyTo}
             showRoute={showRoute}
-            showPendingRoute={true}
-            pendingRouteGeometry={pendingRoute.route?.geometry ?? null}
+            showPendingRoute={!isViewingFinishedWave}
+            pendingRouteGeometry={
+              isViewingFinishedWave
+                ? visibleWave?.delivery?.geometry ?? null
+                : pendingRoute.route?.geometry ?? null
+            }
+          />
+          <WaveTabs
+            activeWave={wavesStore.activeWave}
+            finishedWaves={wavesStore.finishedWaves}
+            selectedWaveId={wavesStore.selectedWaveId}
+            onSelect={(id) => wavesStore.setSelectedWaveId(id)}
+            onFinishActive={() => wavesStore.finishActiveWave()}
+            onStartNew={() => wavesStore.startNewWave()}
+            onReopen={(id) => wavesStore.reopenWave(id)}
+            onDelete={(id) => wavesStore.deleteWave(id)}
           />
           <div className="absolute bottom-3 left-3 z-[400] pointer-events-none">
             <div className="rounded-md bg-background/85 backdrop-blur-sm border border-border px-2.5 py-1.5 text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
@@ -353,7 +440,7 @@ export default function MapView() {
           pendingKm={pendingKm}
           pendingPotentialRub={pendingPotentialRub}
           deliveries={sortedVisible}
-          pending={deliveriesStore.pending}
+          pending={pendingForUi}
           selectedId={selectedId}
           shifts={salary.shifts}
           onSetShiftActive={salary.setShiftActive}
@@ -363,17 +450,27 @@ export default function MapView() {
             setFlyTo({ lat, lng, zoom: 16 });
           }}
           onRemoveDelivery={(id) => deliveriesStore.removeDelivery(id)}
-          onRemovePending={(id) => deliveriesStore.removePending(id)}
-          onCompletePending={(id, amount) => deliveriesStore.completePending(id, amount)}
+          onRemovePending={(id) => wavesStore.removeStop(id)}
+          onCompletePending={(id, amount) => completePendingStop(id, amount)}
           onAddPendingFromAddress={(r, jobId) => {
             const job = salary.jobs.find((j) => j.id === jobId);
-            return deliveriesStore.addPending({
+            wavesStore.ensureActiveWave();
+            const stop = wavesStore.addStop({
               jobId,
               lat: r.lat,
               lng: r.lng,
               address: r.shortName,
               priceRub: job?.perOrderRateRub,
             });
+            return {
+              id: stop.id,
+              jobId: stop.jobId,
+              lat: stop.lat,
+              lng: stop.lng,
+              address: stop.address,
+              priceRub: stop.priceRub,
+              createdAt: stop.createdAt,
+            } as PendingOrder;
           }}
           onStartDriving={() => setDriving(true)}
         />
@@ -400,14 +497,15 @@ export default function MapView() {
           }}
           onSubmitPending={(jobId) => {
             const job = salary.jobs.find((j) => j.id === jobId);
-            const p = deliveriesStore.addPending({
+            wavesStore.ensureActiveWave();
+            const stop = wavesStore.addStop({
               jobId,
               lat: addingPoint.lat,
               lng: addingPoint.lng,
               address: addingPoint.address,
               priceRub: job?.perOrderRateRub,
             });
-            setSelectedId(p.id);
+            setSelectedId(stop.id);
             setAddingPoint(null);
           }}
         />
@@ -1308,6 +1406,144 @@ function DepotEditDialog({
               ))}
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+function WaveTabs({
+  activeWave,
+  finishedWaves,
+  selectedWaveId,
+  onSelect,
+  onFinishActive,
+  onStartNew,
+  onReopen,
+  onDelete,
+}: {
+  activeWave: Wave | null;
+  finishedWaves: Wave[];
+  selectedWaveId: string | null;
+  onSelect: (id: string | null) => void;
+  onFinishActive: () => void;
+  onStartNew: () => void;
+  onReopen: (id: string) => void;
+  onDelete: (id: string) => void;
+}) {
+  if (!activeWave && finishedWaves.length === 0) return null;
+  const activePending = activeWave?.stops.filter((s) => s.status === "pending").length ?? 0;
+  const activeDone = activeWave?.stops.filter((s) => s.status === "delivered").length ?? 0;
+  const isActiveSelected = !selectedWaveId && !!activeWave;
+
+  return (
+    <div className="absolute top-3 left-3 right-3 z-[450] pointer-events-none">
+      <div className="pointer-events-auto rounded-md bg-background/90 backdrop-blur-sm border border-border shadow-lg overflow-x-auto">
+        <div className="flex items-stretch divide-x divide-border min-w-min">
+          {activeWave && (
+            <button
+              onClick={() => onSelect(null)}
+              className={cn(
+                "px-3 py-2 text-[10px] uppercase tracking-[0.18em] flex items-center gap-2 whitespace-nowrap transition-colors",
+                isActiveSelected
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground",
+              )}
+              title="Текущая волна заказов"
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              <span className="font-semibold">волна · в работе</span>
+              <span className="text-[10px] opacity-70">
+                {activeDone}/{activeDone + activePending}
+              </span>
+            </button>
+          )}
+          {finishedWaves.slice(0, 8).map((w, i) => {
+            const sel = selectedWaveId === w.id;
+            const done = w.stops.filter((s) => s.status === "delivered").length;
+            const total = w.stops.length;
+            const finishedAt = w.finishedAt ? new Date(w.finishedAt) : null;
+            const label = finishedAt
+              ? `${String(finishedAt.getHours()).padStart(2, "0")}:${String(finishedAt.getMinutes()).padStart(2, "0")}`
+              : "—";
+            return (
+              <button
+                key={w.id}
+                onClick={() => onSelect(w.id)}
+                className={cn(
+                  "px-3 py-2 text-[10px] uppercase tracking-[0.18em] flex items-center gap-2 whitespace-nowrap transition-colors",
+                  sel
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                )}
+                title={`Волна ${finishedWaves.length - i}: ${done}/${total} доставлено в ${label}`}
+              >
+                <span className="font-semibold">волна {finishedWaves.length - i}</span>
+                <span className="opacity-70">
+                  {done}/{total} · {label}
+                </span>
+              </button>
+            );
+          })}
+          <div className="ml-auto flex items-stretch divide-x divide-border">
+            {activeWave && activePending === 0 && activeDone > 0 && (
+              <button
+                onClick={onFinishActive}
+                className="px-3 py-2 text-[10px] uppercase tracking-[0.18em] text-emerald-600 dark:text-emerald-400 hover:bg-muted whitespace-nowrap"
+                title="Завершить текущую волну (можно открыть как новую)"
+              >
+                ✓ завершить волну
+              </button>
+            )}
+            {activeWave && activePending > 0 && (
+              <button
+                onClick={() => {
+                  if (
+                    confirm(
+                      "Завершить текущую волну? Невыполненные точки останутся в архиве этой волны.",
+                    )
+                  ) {
+                    onFinishActive();
+                  }
+                }}
+                className="px-3 py-2 text-[10px] uppercase tracking-[0.18em] text-muted-foreground hover:text-foreground hover:bg-muted whitespace-nowrap"
+                title="Завершить волну, даже если есть невыполненные точки"
+              >
+                завершить
+              </button>
+            )}
+            {!activeWave && (
+              <button
+                onClick={onStartNew}
+                className="px-3 py-2 text-[10px] uppercase tracking-[0.18em] text-foreground hover:bg-muted whitespace-nowrap"
+                title="Начать новую волну заказов"
+              >
+                + новая волна
+              </button>
+            )}
+            {selectedWaveId && (
+              <>
+                <button
+                  onClick={() => onReopen(selectedWaveId)}
+                  className="px-3 py-2 text-[10px] uppercase tracking-[0.18em] text-muted-foreground hover:text-foreground hover:bg-muted whitespace-nowrap"
+                  title="Возобновить эту волну (станет активной)"
+                >
+                  ↻ возобновить
+                </button>
+                <button
+                  onClick={() => {
+                    if (confirm("Удалить эту волну из архива?")) {
+                      onDelete(selectedWaveId);
+                    }
+                  }}
+                  className="px-3 py-2 text-[10px] uppercase tracking-[0.18em] text-red-500 hover:bg-muted whitespace-nowrap"
+                  title="Удалить из архива"
+                >
+                  ✕
+                </button>
+              </>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );
