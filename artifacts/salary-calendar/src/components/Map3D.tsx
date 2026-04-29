@@ -11,7 +11,20 @@ import type { GeoPosition } from "@/lib/geolocation";
 
 const SPB_CENTER: [number, number] = [30.3351, 59.9343];
 
-const OPENFREEMAP_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
+// Tiles, fonts, sprites and the style JSON are routed through our own server
+// (Vite dev proxy / production proxy) because the upstream Cloudflare host
+// `tiles.openfreemap.org` is intermittently unreachable in some networks (RU).
+// The browser hits the same origin it loaded the app from — no VPN required.
+const OPENFREEMAP_PROXY_PREFIX = "/_tiles/openfreemap";
+const OPENFREEMAP_STYLE_URL = `${OPENFREEMAP_PROXY_PREFIX}/styles/liberty`;
+const OPENFREEMAP_UPSTREAM = "https://tiles.openfreemap.org";
+
+function rewriteOpenFreeMapUrl(url: string): string {
+  if (url.startsWith(OPENFREEMAP_UPSTREAM)) {
+    return OPENFREEMAP_PROXY_PREFIX + url.slice(OPENFREEMAP_UPSTREAM.length);
+  }
+  return url;
+}
 
 function jobColor(job: ResolvedJob | undefined, theme: "dark" | "light"): string {
   if (job?.color) return job.color;
@@ -272,6 +285,11 @@ export default function Map3D({
         canvasContextAttributes: { antialias: true },
         attributionControl: { compact: true },
         maxPitch: 75,
+        // The style JSON returned by the proxy still contains absolute
+        // upstream URLs for tiles/fonts/sprites — rewrite each one to go
+        // through our same-origin proxy so it works on networks that block
+        // the upstream Cloudflare host.
+        transformRequest: (url) => ({ url: rewriteOpenFreeMapUrl(url) }),
       });
     } catch (err) {
       console.error("[Map3D] map ctor failed", err);
