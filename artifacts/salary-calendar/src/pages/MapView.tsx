@@ -36,7 +36,7 @@ import {
 import L from "leaflet";
 import DeliveryMap, { type MapLayerMode } from "@/components/DeliveryMap";
 import Map3D from "@/components/Map3D";
-import MapillaryPanorama from "@/components/MapillaryPanorama";
+import StreetPanorama from "@/components/StreetPanorama";
 import DriveMode from "@/components/DriveMode";
 import { cn } from "@/lib/utils";
 
@@ -703,7 +703,7 @@ export default function MapView() {
         />
       )}
 
-      <MapillaryPanorama
+      <StreetPanorama
         open={!!panorama}
         lat={panorama?.lat ?? null}
         lng={panorama?.lng ?? null}

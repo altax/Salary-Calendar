@@ -13,7 +13,6 @@ import {
   type Layer,
 } from "@deck.gl/core";
 import { PathLayer, ColumnLayer } from "@deck.gl/layers";
-import { TripsLayer } from "@deck.gl/geo-layers";
 import mlcontour from "maplibre-contour";
 import { cn } from "@/lib/utils";
 import type { Delivery, PendingOrder } from "@/lib/deliveries";
@@ -1331,7 +1330,6 @@ export default function Map3D({
   const deckOverlayRef = useRef<MapboxOverlay | null>(null);
   const deckLayersRef = useRef<{
     route?: Layer;
-    pulse?: Layer;
     trees?: Layer;
     treeTrunks?: Layer;
   }>({});
@@ -1340,15 +1338,10 @@ export default function Map3D({
     if (!overlay) return;
     const slots = deckLayersRef.current;
     // Order matters: tree trunks first so the canopy hides their tops,
-    // then the route ribbon (continuous neon stripe), then the animated
-    // pulse on top of it so the bright moving head reads above
-    // everything else.
-    const layers = [
-      slots.treeTrunks,
-      slots.trees,
-      slots.route,
-      slots.pulse,
-    ].filter(Boolean) as Layer[];
+    // then route ribbon last so it sits visually on top of foliage.
+    const layers = [slots.treeTrunks, slots.trees, slots.route].filter(
+      Boolean,
+    ) as Layer[];
     overlay.setProps({ layers });
   }, []);
   const themeRef = useRef(theme);
@@ -2047,105 +2040,6 @@ export default function Map3D({
       },
     });
     pushDeckLayers();
-  }, [activeRouteGeometry, showRoute, pushDeckLayers]);
-
-  // Animated "neon pulse" running along the route, on a loop. This is
-  // the single biggest "feels alive" visual cue we can add — the static
-  // ribbon above tells the courier WHERE to go, the moving pulse tells
-  // them WHICH WAY. We use deck.gl's TripsLayer which natively renders
-  // a fading-tail trip with an animated `currentTime`; we drive that
-  // time via a requestAnimationFrame loop and a per-segment timestamp
-  // array we precompute from cumulative segment lengths so the pulse
-  // moves at constant *visual speed* regardless of the path's geometry
-  // (otherwise it would gallop on long straights and crawl on turns).
-  useEffect(() => {
-    if (!deckOverlayRef.current) return;
-    if (!showRoute || !activeRouteGeometry || activeRouteGeometry.length < 2) {
-      deckLayersRef.current.pulse = undefined;
-      pushDeckLayers();
-      return;
-    }
-
-    // Build path with cumulative timestamps. We use *meters travelled*
-    // as the time axis so 1 second of animation == a fixed real-world
-    // distance, no matter how curvy the path is.
-    const path: [number, number, number][] = [];
-    const timestamps: number[] = [];
-    let cumulative = 0;
-    for (let i = 0; i < activeRouteGeometry.length; i += 1) {
-      const [lat, lng] = activeRouteGeometry[i];
-      path.push([lng, lat, 5]);
-      if (i > 0) {
-        const [pLat, pLng] = activeRouteGeometry[i - 1];
-        // Equirectangular fast distance (good enough for animation timing).
-        const midLat = ((pLat + lat) / 2) * (Math.PI / 180);
-        const dx = (lng - pLng) * Math.cos(midLat) * 111_000;
-        const dy = (lat - pLat) * 111_000;
-        cumulative += Math.hypot(dx, dy);
-      }
-      timestamps.push(cumulative);
-    }
-    const totalLength = cumulative;
-    if (totalLength <= 0) {
-      deckLayersRef.current.pulse = undefined;
-      pushDeckLayers();
-      return;
-    }
-
-    // Animation loop. We loop the head every `loopMs` seconds; the tail
-    // (`trailLength`) is in the same time units as `timestamps`, i.e.
-    // metres of route. ~250 m of glowing tail looks like a real "swoosh"
-    // of light; longer feels laggy, shorter looks too dotted.
-    const loopMs = 6000;
-    const trailLengthM = 250;
-    // Pre-bake a small data structure so TripsLayer doesn't reallocate
-    // on every animation frame (it shouldn't, but cheap insurance).
-    const pulseData = [{ path, timestamps }];
-    let raf = 0;
-    let cancelled = false;
-
-    const tick = () => {
-      if (cancelled) return;
-      // Map wall-clock time → a head position that scans from
-      // (-trailLength) to (totalLength + trailLength) over `loopMs`,
-      // so the bright head leaves the start with its tail still off-
-      // screen and exits the end with its tail already gone — no
-      // visible pop at the loop boundary.
-      const t = (performance.now() % loopMs) / loopMs;
-      const head =
-        -trailLengthM + t * (totalLength + 2 * trailLengthM);
-      deckLayersRef.current.pulse = new TripsLayer({
-        id: "route-3d-pulse",
-        data: pulseData,
-        getPath: (d: any) => d.path,
-        getTimestamps: (d: any) => d.timestamps,
-        // Bright cyan-white head fading to fully transparent tail.
-        getColor: [180, 230, 255, 255],
-        opacity: 0.95,
-        widthMinPixels: 3,
-        widthMaxPixels: 18,
-        widthUnits: "meters",
-        getWidth: 4,
-        rounded: true,
-        trailLength: trailLengthM,
-        currentTime: head,
-        capRounded: true,
-        jointRounded: true,
-        // Render *additively* against the underlying ribbon so the
-        // moving head looks like a real glow, not just a brighter line.
-        parameters: { depthTest: true, blend: true },
-      });
-      pushDeckLayers();
-      raf = window.requestAnimationFrame(tick);
-    };
-    raf = window.requestAnimationFrame(tick);
-
-    return () => {
-      cancelled = true;
-      window.cancelAnimationFrame(raf);
-      deckLayersRef.current.pulse = undefined;
-      pushDeckLayers();
-    };
   }, [activeRouteGeometry, showRoute, pushDeckLayers]);
 
   // 3D trees scattered inside park / wood / grass polygons. Each tree is
