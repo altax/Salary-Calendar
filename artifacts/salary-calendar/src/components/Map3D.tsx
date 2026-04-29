@@ -232,12 +232,150 @@ function applyDarkTheme(map: MLMap, theme: "dark" | "light") {
   }
 }
 
+// Approximate the sun/moon position from the local clock so the 3D building
+// shading actually matches what the courier sees out of the window. We do
+// not need astronomical precision — what matters is that morning light
+// comes from the east and is warm, noon light is overhead and white,
+// evening light is from the west and warm, and nighttime is low/blue.
+function computeSolarLight(date: Date): {
+  azimuth: number;
+  polar: number;
+  intensity: number;
+  color: string;
+} {
+  const h = date.getHours() + date.getMinutes() / 60;
+  const isDay = h >= 5 && h <= 22;
+  if (!isDay) {
+    return { azimuth: 0, polar: 35, intensity: 0.18, color: "#9ab3d4" };
+  }
+  // Map 6am → east (90°), 12pm → south (180°), 6pm → west (270°). Linear
+  // interpolation is good enough for a stylised navigator.
+  const dayProgress = Math.min(1, Math.max(0, (h - 6) / 12));
+  const azimuth = 90 + dayProgress * 180;
+  // Polar: 90° = sun on the horizon, 0° = directly overhead. We swing
+  // between 75° at sunrise/sunset and 30° at noon so building sides get
+  // long shadows in the morning/evening (which reads as 3D) and shorter
+  // ones at midday.
+  const polar = 30 + Math.abs(dayProgress - 0.5) * 2 * 45;
+  // Intensity peaks at solar noon and tapers near sunrise/sunset.
+  const intensity = 0.55 - Math.abs(dayProgress - 0.5) * 0.3;
+  // Warm color near sunrise/sunset, neutral white at midday.
+  let color = "#ffffff";
+  if (h < 8 || h > 18) color = "#ffcfa0";
+  else if (h < 9 || h > 17) color = "#fff1d9";
+  return { azimuth, polar, intensity, color };
+}
+
+function applySolarLight(map: MLMap, theme: "dark" | "light") {
+  try {
+    const { azimuth, polar, intensity, color } = computeSolarLight(new Date());
+    map.setLight({
+      anchor: "map",
+      // [radial, azimuth, polar] in degrees — radial=1.5 keeps the source
+      // off-center so faces facing the sun are noticeably lighter than
+      // those in shadow.
+      position: [1.5, azimuth, polar],
+      color,
+      intensity: theme === "dark" ? Math.max(0.15, intensity * 0.7) : intensity,
+    });
+  } catch (err) {
+    console.warn("[Map3D] setLight failed", err);
+  }
+}
+
+function applyAtmosphere(map: MLMap, theme: "dark" | "light") {
+  try {
+    if (theme === "dark") {
+      map.setSky({
+        "sky-color": "#0a1428",
+        "sky-horizon-blend": 0.55,
+        "horizon-color": "#1f2a3d",
+        "horizon-fog-blend": 0.8,
+        "fog-color": "#0c0e12",
+        "fog-ground-blend": 0.45,
+        "atmosphere-blend": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          12,
+          1,
+          16,
+          0.55,
+          20,
+          0.15,
+        ],
+      } as any);
+    } else {
+      map.setSky({
+        "sky-color": "#cbd9ec",
+        "sky-horizon-blend": 0.6,
+        "horizon-color": "#e2e8f0",
+        "horizon-fog-blend": 0.7,
+        "fog-color": "#dde2eb",
+        "fog-ground-blend": 0.4,
+        "atmosphere-blend": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          12,
+          0.95,
+          16,
+          0.45,
+          20,
+          0.1,
+        ],
+      } as any);
+    }
+  } catch (err) {
+    console.warn("[Map3D] setSky failed", err);
+  }
+}
+
+// Mask out parking-lot dotted markings baked into the OSM raster by drawing
+// a flat fill on top using the `landuse` vector layer where class=parking.
+// Without this, every parking lot looks like a noisy hatched mess that
+// fights with the route line and the highlighted building.
+function addParkingMask(map: MLMap, theme: "dark" | "light") {
+  if (map.getLayer("parking-mask")) return;
+  // Need the openmaptiles vector source — same one used for 3D buildings.
+  addOpenMapTilesVectorSource(map);
+  if (!map.getSource("openmaptiles")) return;
+  try {
+    map.addLayer(
+      {
+        id: "parking-mask",
+        type: "fill",
+        source: "openmaptiles",
+        "source-layer": "landuse",
+        filter: ["==", ["get", "class"], "parking"],
+        paint: {
+          "fill-color": theme === "dark" ? "#161a20" : "#cfd4dc",
+          "fill-opacity": 0.85,
+        },
+      } as any,
+      // Draw under the 3D buildings if they're already in the style.
+      map.getLayer("3d-buildings") ? "3d-buildings" : undefined,
+    );
+  } catch (err) {
+    console.warn("[Map3D] parking mask failed", err);
+  }
+}
+
 function add3DBuildings(map: MLMap, theme: "dark" | "light") {
   if (map.getLayer("3d-buildings")) return;
   const isDark = theme === "dark";
-  const buildingColor = isDark ? "#1c1f25" : "#dde0e6";
-  const buildingTop = isDark ? "#272b33" : "#cdd1d8";
-  const buildingTall = isDark ? "#3a3f48" : "#b9bdc4";
+  // Color ramp now reads as a proxy for *building type* via height —
+  // courier-relevant because:
+  //   0-12 m   → warm tan = private houses, garages, ПВЗ-боксы
+  //   12-30 m  → neutral steel = панельки, residential apartments
+  //   30-80 m  → cool blue = коммерческие башни, бизнес-центры
+  //   80 m+    → bright steel = небоскрёбы, ориентиры
+  // The contrast between bands is intentionally bigger than before so
+  // even a fast glance tells the courier "это жилой район" vs "это БЦ".
+  const buildingColor = isDark ? "#2a2620" : "#d6cfc1"; // low / warm
+  const buildingMid = isDark ? "#262a32" : "#c2c8d2"; // mid / neutral
+  const buildingTop = isDark ? "#2c3a4d" : "#9eaec3"; // tall / cool blue
+  const buildingTall = isDark ? "#3d557a" : "#7d92b4"; // tower / bright steel
 
   // Make sure the OpenMapTiles vector source is loaded — only used for 3D
   // building geometry on top of the OSM raster basemap.
@@ -284,14 +422,20 @@ function add3DBuildings(map: MLMap, theme: "dark" | "light") {
           heightExpr,
           0,
           buildingColor,
-          50,
+          12,
+          buildingColor,
+          22,
+          buildingMid,
+          45,
           buildingTop,
-          150,
+          90,
+          buildingTall,
+          200,
           buildingTall,
         ],
         "fill-extrusion-height": heightExpr,
         "fill-extrusion-base": baseExpr,
-        "fill-extrusion-opacity": 0.92,
+        "fill-extrusion-opacity": 0.94,
         "fill-extrusion-vertical-gradient": true,
       },
     } as any,
@@ -608,6 +752,15 @@ export default function Map3D({
         // only add 3D building extrusions on top.
         // applyDarkTheme(map, themeRef.current);
         add3DBuildings(map, themeRef.current);
+        // Mask noisy parking-lot dotted markings baked into the OSM raster.
+        addParkingMask(map, themeRef.current);
+        // Atmosphere: hazy horizon + ground-fog blend at distance, makes
+        // the pitched 3D camera feel like depth instead of a flat diorama.
+        applyAtmosphere(map, themeRef.current);
+        // Time-of-day directional light: building faces facing the sun
+        // get noticeably brighter than shaded ones, which is the single
+        // cheapest visual cue that screams "this is 3D, not a sketch".
+        applySolarLight(map, themeRef.current);
       } catch (err) {
         console.warn("[Map3D] extrusion apply failed", err);
       }
