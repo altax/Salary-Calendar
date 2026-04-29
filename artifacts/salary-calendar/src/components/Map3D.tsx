@@ -18,6 +18,21 @@ const SPB_CENTER: [number, number] = [30.3351, 59.9343];
 const OPENFREEMAP_PROXY_PREFIX = "/_tiles/openfreemap";
 const OPENFREEMAP_UPSTREAM = "https://tiles.openfreemap.org";
 const OSM_PROXY_PREFIX = "/_tiles/osm";
+// Satellite imagery — ArcGIS World Imagery, free w/ attribution. This is
+// the single highest-impact change vs. a flat vector basemap: courtyards,
+// asphalt, parking lots, trees, even individual cars become recognisable
+// instead of being painted-on flat shapes. Same source the 2D MapView
+// already uses in "satellite" mode, so no new external dependency.
+const SAT_TILES =
+  "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}";
+const SAT_ATTR =
+  'Tiles © Esri — Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community';
+// AWS Terrarium DEM (Mapzen-format) — free, open, CORS-enabled. Drives
+// MapLibre's `setTerrain` so hills look like hills instead of a flat
+// plane. If AWS is unreachable we silently degrade to flat ground — the
+// raster basemap and 3D buildings still render fine without DEM.
+const TERRAIN_DEM_TILES =
+  "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
 
 function proxyOrigin(): string {
   if (typeof window !== "undefined" && window.location?.origin) {
@@ -48,15 +63,27 @@ function rewriteOpenFreeMapUrl(url: string): string {
 function buildBaseStyle(theme: "dark" | "light"): maplibregl.StyleSpecification {
   const origin = proxyOrigin();
   const subs = ["a", "b", "c"];
-  const tiles = subs.map((s) => `${origin}${OSM_PROXY_PREFIX}/${s}/{z}/{x}/{y}.png`);
-  const background = theme === "dark" ? "#0a0d12" : "#f3f4f7";
+  const osmTiles = subs.map((s) => `${origin}${OSM_PROXY_PREFIX}/${s}/{z}/{x}/{y}.png`);
+  const background = theme === "dark" ? "#0a0d12" : "#1f2a36";
   return {
     version: 8,
     glyphs: `${origin}${OPENFREEMAP_PROXY_PREFIX}/fonts/{fontstack}/{range}.pbf`,
     sources: {
+      // Satellite imagery — the actual ground photo. Loaded directly
+      // from ArcGIS (CORS-enabled, no proxy needed).
+      satellite: {
+        type: "raster",
+        tiles: [SAT_TILES],
+        tileSize: 256,
+        attribution: SAT_ATTR,
+        maxzoom: 19,
+      },
+      // Plain OSM raster as a *fallback* drawn underneath satellite. If a
+      // satellite tile fails to load we still see something instead of a
+      // black void. Heavily dimmed so it doesn't fight the photograph.
       osm: {
         type: "raster",
-        tiles,
+        tiles: osmTiles,
         tileSize: 256,
         attribution:
           '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>',
@@ -70,20 +97,43 @@ function buildBaseStyle(theme: "dark" | "light"): maplibregl.StyleSpecification 
         paint: { "background-color": background },
       },
       {
-        id: "osm-tiles",
+        // Bottom: dimmed OSM as a safety net for missing sat tiles.
+        id: "osm-fallback",
         type: "raster",
         source: "osm",
         minzoom: 0,
         maxzoom: 22,
-        // In dark mode we tone the bright OSM raster down so it matches the
-        // app's dark theme without losing legibility on the e-bike tablet.
-        // In light mode we still desaturate + dim slightly so the bright
-        // asphalt doesn't dominate the frame and the route line + selected
-        // building stay the visual anchors.
+        paint: {
+          "raster-brightness-min": 0.0,
+          "raster-brightness-max": 0.35,
+          "raster-saturation": -0.6,
+          "raster-opacity": 0.6,
+        },
+      },
+      {
+        // Real ground photograph. Slight desaturation in dark mode keeps
+        // the building extrusions visually dominant; in light mode we
+        // boost contrast a touch so the photo doesn't look washed out
+        // under the day sun light we apply via setLight.
+        id: "satellite-tiles",
+        type: "raster",
+        source: "satellite",
+        minzoom: 0,
+        maxzoom: 22,
         paint:
           theme === "dark"
-            ? { "raster-brightness-min": 0.0, "raster-brightness-max": 0.55, "raster-saturation": -0.35, "raster-contrast": 0.1 }
-            : { "raster-brightness-min": 0.05, "raster-brightness-max": 0.82, "raster-saturation": -0.22, "raster-contrast": 0.05 },
+            ? {
+                "raster-brightness-min": 0.0,
+                "raster-brightness-max": 0.7,
+                "raster-saturation": -0.15,
+                "raster-contrast": 0.1,
+              }
+            : {
+                "raster-brightness-min": 0.05,
+                "raster-brightness-max": 0.95,
+                "raster-saturation": 0.0,
+                "raster-contrast": 0.12,
+              },
       },
     ],
   };
@@ -328,6 +378,218 @@ function applyAtmosphere(map: MLMap, theme: "dark" | "light") {
     }
   } catch (err) {
     console.warn("[Map3D] setSky failed", err);
+  }
+}
+
+// Enable real 3D terrain via an AWS Terrarium DEM source. Even gentle
+// elevation makes the world feel like a *place* instead of a flat
+// diorama — ridges cast shading on themselves, roads visibly climb,
+// the horizon stops being a perfect line. We keep exaggeration modest
+// (1.2) so cities don't look mountainous.
+function applyTerrain(map: MLMap) {
+  if (map.getSource("dem")) return;
+  try {
+    map.addSource("dem", {
+      type: "raster-dem",
+      tiles: [TERRAIN_DEM_TILES],
+      tileSize: 256,
+      encoding: "terrarium",
+      maxzoom: 14,
+      attribution:
+        '<a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md">Tilezen Joerd</a>',
+    } as any);
+    map.setTerrain({ source: "dem", exaggeration: 1.2 } as any);
+  } catch (err) {
+    console.warn("[Map3D] terrain failed (non-fatal)", err);
+  }
+}
+
+// Draw a thin vector road overlay on top of the satellite photo. Without
+// this the photographed asphalt is hard to read at speed — too much
+// noise from cars/lane markings/shadows. With it, every street has a
+// crisp white casing and a darker centre line, so the road network
+// "pops" off the photo the same way it does in Google's hybrid view.
+function addRoadOverlay(map: MLMap, theme: "dark" | "light") {
+  if (map.getLayer("road-overlay-line")) return;
+  addOpenMapTilesVectorSource(map);
+  if (!map.getSource("openmaptiles")) return;
+  // Driveable road classes from openmaptiles `transportation` layer.
+  const ROAD_CLASSES = [
+    "motorway",
+    "trunk",
+    "primary",
+    "secondary",
+    "tertiary",
+    "minor",
+    "service",
+    "residential",
+    "unclassified",
+    "living_street",
+  ];
+  const isRoad: any = ["in", ["get", "class"], ["literal", ROAD_CLASSES]];
+  // Width grows with zoom + ramps up with road class importance.
+  const widthExpr: any = [
+    "interpolate",
+    ["exponential", 1.4],
+    ["zoom"],
+    12,
+    [
+      "match",
+      ["get", "class"],
+      "motorway",
+      2.0,
+      "trunk",
+      1.6,
+      "primary",
+      1.2,
+      "secondary",
+      0.9,
+      0.6,
+    ],
+    18,
+    [
+      "match",
+      ["get", "class"],
+      "motorway",
+      18,
+      "trunk",
+      15,
+      "primary",
+      12,
+      "secondary",
+      10,
+      "tertiary",
+      8,
+      "service",
+      4,
+      6,
+    ],
+  ];
+  try {
+    map.addLayer({
+      id: "road-overlay-casing",
+      type: "line",
+      source: "openmaptiles",
+      "source-layer": "transportation",
+      filter: isRoad,
+      minzoom: 12,
+      layout: { "line-cap": "round", "line-join": "round" },
+      paint: {
+        "line-color": theme === "dark" ? "#0f1418" : "#ffffff",
+        "line-opacity": theme === "dark" ? 0.6 : 0.85,
+        "line-width": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          12,
+          ["*", widthExpr, 1.6],
+          18,
+          ["+", widthExpr, 4],
+        ],
+      },
+    } as any);
+    map.addLayer({
+      id: "road-overlay-line",
+      type: "line",
+      source: "openmaptiles",
+      "source-layer": "transportation",
+      filter: isRoad,
+      minzoom: 12,
+      layout: { "line-cap": "round", "line-join": "round" },
+      paint: {
+        "line-color":
+          theme === "dark"
+            ? [
+                "match",
+                ["get", "class"],
+                "motorway",
+                "#fbbf24",
+                "trunk",
+                "#fbbf24",
+                "primary",
+                "#e5e7eb",
+                "#cbd5e1",
+              ]
+            : [
+                "match",
+                ["get", "class"],
+                "motorway",
+                "#f59e0b",
+                "trunk",
+                "#f59e0b",
+                "primary",
+                "#fde68a",
+                "#f1f5f9",
+              ],
+        "line-opacity": theme === "dark" ? 0.78 : 0.88,
+        "line-width": widthExpr,
+      },
+    } as any);
+  } catch (err) {
+    console.warn("[Map3D] road overlay failed", err);
+  }
+}
+
+// Extrude wooded / green areas as low volumes. Real trees are tall
+// stochastic shapes, but even a flat 4 m green slab (woods) + 1.5 m
+// grass slab dramatically improves the "this is a place" feeling
+// because the courtyard in front of the destination is no longer
+// painted onto the ground — it has *thickness*.
+function addGreenVolumes(map: MLMap, theme: "dark" | "light") {
+  if (map.getLayer("green-volume-wood")) return;
+  addOpenMapTilesVectorSource(map);
+  if (!map.getSource("openmaptiles")) return;
+  try {
+    map.addLayer({
+      id: "green-volume-wood",
+      type: "fill-extrusion",
+      source: "openmaptiles",
+      "source-layer": "landcover",
+      filter: ["==", ["get", "class"], "wood"],
+      minzoom: 13,
+      paint: {
+        "fill-extrusion-color": theme === "dark" ? "#1f3a23" : "#3b7a3a",
+        "fill-extrusion-base": 0,
+        "fill-extrusion-height": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          13,
+          0,
+          15,
+          4,
+          18,
+          8,
+        ],
+        "fill-extrusion-opacity": 0.85,
+      },
+    } as any);
+    map.addLayer({
+      id: "green-volume-grass",
+      type: "fill-extrusion",
+      source: "openmaptiles",
+      "source-layer": "landcover",
+      filter: ["in", ["get", "class"], ["literal", ["grass", "park"]]],
+      minzoom: 14,
+      paint: {
+        "fill-extrusion-color": theme === "dark" ? "#2c4a2e" : "#7fb87b",
+        "fill-extrusion-base": 0,
+        "fill-extrusion-height": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          14,
+          0,
+          17,
+          1.5,
+          19,
+          2.2,
+        ],
+        "fill-extrusion-opacity": 0.7,
+      },
+    } as any);
+  } catch (err) {
+    console.warn("[Map3D] green volumes failed", err);
   }
 }
 
@@ -602,6 +864,13 @@ function add3DBuildings(map: MLMap, theme: "dark" | "light") {
         "fill-extrusion-base": baseExpr,
         "fill-extrusion-opacity": 0.94,
         "fill-extrusion-vertical-gradient": true,
+        // Ambient occlusion: darkens the *base* of every building where
+        // it meets the ground and the corners between adjacent walls.
+        // Single highest-leverage paint property for "this is grounded
+        // 3D, not floating Lego" — without it the buildings look like
+        // they're hovering above the satellite photo. MapLibre 3.x+.
+        "fill-extrusion-ambient-occlusion-intensity": 0.4,
+        "fill-extrusion-ambient-occlusion-radius": 4.0,
       },
     } as any,
     beforeId,
@@ -939,8 +1208,20 @@ export default function Map3D({
         // blank. We keep the vanilla OpenFreeMap "liberty" colors for now and
         // only add 3D building extrusions on top.
         // applyDarkTheme(map, themeRef.current);
+        // Real elevation under the satellite photo. Done BEFORE buildings so
+        // the extrusion bases sit on terrain height instead of sea level.
+        applyTerrain(map);
+        // Volumetric green areas (woods/parks/grass) — gives parks
+        // thickness so they read as real outdoor space.
+        addGreenVolumes(map, themeRef.current);
+        // Crisp vector road overlay over the satellite photo so the
+        // network is legible at a glance even where the photograph is
+        // shadowed or noisy.
+        addRoadOverlay(map, themeRef.current);
         add3DBuildings(map, themeRef.current);
-        // Mask noisy parking-lot dotted markings baked into the OSM raster.
+        // Parking mask is no longer needed against satellite imagery
+        // (real parking lots already look like real asphalt), but keep
+        // the helper for the dimmed OSM fallback layer underneath.
         addParkingMask(map, themeRef.current);
         // Atmosphere: hazy horizon + ground-fog blend at distance, makes
         // the pitched 3D camera feel like depth instead of a flat diorama.
