@@ -315,7 +315,25 @@ export default function Map3D({
     if (!containerRef.current) return;
     let cancelled = false;
 
-    console.log("[Map3D] init start");
+    // Walk the ancestor chain and report every box's actual rendered size +
+    // computed height/min-height. The single most common reason the canvas
+    // ends up at 300px is one of these ancestors collapsing — this log lets
+    // us see *which* one without the user having to use devtools.
+    const chain: string[] = [];
+    let node: HTMLElement | null = containerRef.current;
+    let depth = 0;
+    while (node && depth < 10) {
+      const r = node.getBoundingClientRect();
+      const cs = window.getComputedStyle(node);
+      const tag = node.tagName.toLowerCase();
+      const cls = (node.className || "").toString().slice(0, 40);
+      chain.push(
+        `${depth} <${tag}.${cls}> ${Math.round(r.width)}x${Math.round(r.height)} h=${cs.height} minH=${cs.minHeight} display=${cs.display}`,
+      );
+      node = node.parentElement;
+      depth += 1;
+    }
+    console.log("[Map3D] init start — container chain:\n" + chain.join("\n"));
     setLoading(true);
 
     let map: MLMap;
@@ -735,8 +753,16 @@ export default function Map3D({
   }, [flyTo]);
 
   return (
-    <div className={cn("relative w-full h-full", className)}>
-      <div ref={containerRef} className="absolute inset-0" />
+    // `min-h-[520px]` is a *defensive* floor: even if a grandparent in the
+    // page collapses (narrow viewport, header wraps, flex/grid track shrinks
+    // to its 1fr basis, etc.) the map itself refuses to render in less than
+    // 520px so the canvas can't end up as a 300px strip.
+    <div className={cn("relative w-full h-full min-h-[520px]", className)}>
+      {/* Container uses block layout (w-full h-full) instead of `absolute
+          inset-0` so its height is driven by the outer div's min-height even
+          when the absolute positioning containing block would otherwise
+          collapse to 0. */}
+      <div ref={containerRef} className="w-full h-full min-h-[520px]" />
       {loading && !initError ? (
         <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-background/40">
           <div className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground animate-pulse">
