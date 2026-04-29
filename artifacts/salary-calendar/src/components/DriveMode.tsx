@@ -1111,6 +1111,28 @@ export default function DriveMode({
             showRoute={false}
             showPendingRoute={true}
             pendingRouteGeometry={route.route?.geometry ?? null}
+            // Feed the upcoming maneuver to Map3D so it can pull the
+            // camera back on approach and draw a giant rotated arrow on
+            // the asphalt at the turn point.
+            nextManeuver={
+              progress?.nextStep
+                ? {
+                    // OSRM convention: `step.maneuver` describes the
+                    // action taken at the *start* of that step. So the
+                    // user's *next* action (and where it happens) lives
+                    // on `nextStep.maneuver`.
+                    lat: progress.nextStep.maneuver.location[0],
+                    lng: progress.nextStep.maneuver.location[1],
+                    arrow: maneuverArrow(progress.nextStep),
+                    modifier: progress.nextStep.maneuver.modifier ?? null,
+                    bearingBefore:
+                      progress.nextStep.maneuver.bearingBefore ?? null,
+                    bearingAfter:
+                      progress.nextStep.maneuver.bearingAfter ?? null,
+                    distanceM: progress.distanceToNextManeuverM,
+                  }
+                : null
+            }
           />
         ) : (
           <DeliveryMap

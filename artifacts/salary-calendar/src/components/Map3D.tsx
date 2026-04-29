@@ -331,6 +331,171 @@ function applyAtmosphere(map: MLMap, theme: "dark" | "light") {
   }
 }
 
+// Add commercial POIs (shops, supermarkets, ПВЗ-like points) from the
+// openmaptiles `poi` source-layer. We deliberately keep the visual very
+// quiet — small bright dot at zoom 16+, name label at 17+ — so the
+// route + selected building stay the heroes but the courier still
+// sees recognisable landmarks ("оп, тут Пятёрочка на углу — да, я уже
+// почти у точки").
+function addPoiLandmarks(map: MLMap, theme: "dark" | "light") {
+  if (map.getLayer("poi-shops-dot")) return;
+  addOpenMapTilesVectorSource(map);
+  if (!map.getSource("openmaptiles")) return;
+  // openmaptiles `poi` layer carries a `class` field. We pick everyday-life
+  // anchors a courier actually uses to confirm they're in the right area.
+  const SHOP_CLASSES = [
+    "shop",
+    "supermarket",
+    "convenience",
+    "mall",
+    "department_store",
+    "alcohol",
+    "bakery",
+    "clothes",
+    "marketplace",
+    "fast_food",
+    "cafe",
+    "restaurant",
+    "bank",
+    "atm",
+    "post",
+    "pharmacy",
+  ];
+  try {
+    map.addLayer({
+      id: "poi-shops-dot",
+      type: "circle",
+      source: "openmaptiles",
+      "source-layer": "poi",
+      filter: ["in", ["get", "class"], ["literal", SHOP_CLASSES]],
+      minzoom: 16,
+      paint: {
+        "circle-radius": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          16,
+          2.5,
+          18,
+          4,
+          20,
+          5.5,
+        ],
+        "circle-color": "#ffb84d",
+        "circle-stroke-color": theme === "dark" ? "#1a1a20" : "#1f2937",
+        "circle-stroke-width": 1,
+        "circle-opacity": 0.9,
+      },
+    } as any);
+    map.addLayer({
+      id: "poi-shops-label",
+      type: "symbol",
+      source: "openmaptiles",
+      "source-layer": "poi",
+      filter: ["in", ["get", "class"], ["literal", SHOP_CLASSES]],
+      minzoom: 17,
+      layout: {
+        "text-field": ["coalesce", ["get", "name:ru"], ["get", "name"], ""],
+        "text-font": ["Noto Sans Bold"],
+        "text-size": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          17,
+          10,
+          19,
+          12,
+          21,
+          14,
+        ],
+        "text-offset": [0, 0.9],
+        "text-anchor": "top",
+        "text-padding": 4,
+        "text-optional": true,
+      },
+      paint: {
+        "text-color": theme === "dark" ? "#ffd9a8" : "#7a3d00",
+        "text-halo-color": theme === "dark" ? "#0a0d12" : "#ffffff",
+        "text-halo-width": 1.4,
+      },
+    } as any);
+  } catch (err) {
+    console.warn("[Map3D] poi layer failed", err);
+  }
+}
+
+// Add the on-asphalt maneuver arrow — a single big rotated chevron drawn
+// at the upcoming turn point. Reads the rotation angle from the feature's
+// `bearing` property so we can update just the source on every frame.
+function addManeuverArrow(map: MLMap) {
+  if (map.getSource("next-maneuver")) return;
+  try {
+    map.addSource("next-maneuver", {
+      type: "geojson",
+      data: { type: "FeatureCollection", features: [] },
+    });
+    map.addLayer({
+      id: "next-maneuver-glow",
+      type: "circle",
+      source: "next-maneuver",
+      minzoom: 14,
+      paint: {
+        "circle-radius": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          14,
+          12,
+          17,
+          26,
+          19,
+          44,
+        ],
+        "circle-color": "#38bdf8",
+        "circle-opacity": 0.18,
+        "circle-blur": 0.6,
+      },
+    } as any);
+    map.addLayer({
+      id: "next-maneuver-arrow",
+      type: "symbol",
+      source: "next-maneuver",
+      minzoom: 14,
+      layout: {
+        "text-field": ["get", "arrow"],
+        "text-font": ["Noto Sans Bold"],
+        "text-size": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          14,
+          22,
+          17,
+          42,
+          19,
+          64,
+        ],
+        // Lay the glyph flat on the ground, rotated into the road's
+        // bearing so it reads "from behind the steering wheel".
+        "text-rotation-alignment": "map",
+        "text-pitch-alignment": "map",
+        "text-rotate": ["get", "bearing"],
+        "text-allow-overlap": true,
+        "text-ignore-placement": true,
+        "text-padding": 0,
+      },
+      paint: {
+        "text-color": "#0c1f3a",
+        "text-halo-color": "#ffffff",
+        "text-halo-width": 3,
+        "text-halo-blur": 0.4,
+      },
+    } as any);
+  } catch (err) {
+    console.warn("[Map3D] maneuver arrow layer failed", err);
+  }
+}
+
 // Mask out parking-lot dotted markings baked into the OSM raster by drawing
 // a flat fill on top using the `landuse` vector layer where class=parking.
 // Without this, every parking lot looks like a noisy hatched mess that
@@ -535,6 +700,21 @@ function add3DBuildings(map: MLMap, theme: "dark" | "light") {
   }
 }
 
+export type Map3DNextManeuver = {
+  lat: number;
+  lng: number;
+  /** A short glyph that visually summarises the turn — e.g. "↰", "↱", "↑". */
+  arrow: string;
+  /** OSRM modifier ("left", "right", "slight left", …) or null. */
+  modifier?: string | null;
+  /** Bearing in degrees the user is facing *before* the turn. */
+  bearingBefore?: number | null;
+  /** Bearing in degrees the user will face *after* the turn. */
+  bearingAfter?: number | null;
+  /** Distance from current GPS position to the maneuver point, in meters. */
+  distanceM: number;
+};
+
 export type Map3DProps = {
   deliveries: Delivery[];
   pending: PendingOrder[];
@@ -559,6 +739,13 @@ export type Map3DProps = {
   pendingRouteGeometry?: [number, number][] | null;
   activeRouteGeometry?: [number, number][] | null;
   traveledGeometry?: [number, number][] | null;
+  /**
+   * Upcoming turn descriptor. When provided and `followUser` is true, the
+   * camera will pull back + lower its pitch on approach so the courier
+   * sees the whole intersection, and a giant rotated arrow is drawn on
+   * the asphalt at the maneuver point.
+   */
+  nextManeuver?: Map3DNextManeuver | null;
   onMapReady?: (map: MLMap) => void;
 };
 
@@ -586,6 +773,7 @@ export default function Map3D({
   pendingRouteGeometry,
   activeRouteGeometry,
   traveledGeometry,
+  nextManeuver,
   onMapReady,
 }: Map3DProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -761,6 +949,10 @@ export default function Map3D({
         // get noticeably brighter than shaded ones, which is the single
         // cheapest visual cue that screams "this is 3D, not a sketch".
         applySolarLight(map, themeRef.current);
+        // Commercial POI dots & labels (shops, supermarkets, bakeries, …).
+        addPoiLandmarks(map, themeRef.current);
+        // On-asphalt rotated chevron at the next maneuver point.
+        addManeuverArrow(map);
       } catch (err) {
         console.warn("[Map3D] extrusion apply failed", err);
       }
@@ -1103,22 +1295,83 @@ export default function Map3D({
       // dominates the frame — same composition as a car-nav app.
       const canvasH = map.getCanvas().clientHeight || 600;
       const hasHeading = heading != null && Number.isFinite(heading);
+      // Smart camera: if a maneuver is coming up within ~120 m we pull
+      // back and lower the pitch a touch so the entire intersection
+      // (and which lane to be in) fits inside the frame. After the
+      // maneuver passes, the chase camera snaps back to its tight POV.
+      const approachM = nextManeuver?.distanceM ?? Infinity;
+      const isApproachingTurn = nextManeuver != null && approachM < 120;
+      const isVeryClose = nextManeuver != null && approachM < 45;
+      const baseZoom = hasHeading ? 18 : 17;
+      const baseTurnZoom = hasHeading ? 16.7 : 16.2;
+      const zoom = isApproachingTurn ? baseTurnZoom : baseZoom;
+      const pitch = isApproachingTurn
+        ? isVeryClose
+          ? 50
+          : 56
+        : hasHeading
+          ? 72
+          : Math.max(map.getPitch(), 60);
+      // When very close to the turn, also pull the user marker more
+      // toward the centre (less bottom padding) so we see what's
+      // happening on *both* sides of the intersection.
+      const bottomPad = isVeryClose
+        ? Math.round(canvasH * 0.25)
+        : isApproachingTurn
+          ? Math.round(canvasH * 0.35)
+          : Math.round(canvasH * 0.45);
       map.easeTo({
         center: [userPosition.lng, userPosition.lat],
-        zoom: Math.max(map.getZoom(), hasHeading ? 18 : 17),
-        pitch: hasHeading ? 72 : Math.max(map.getPitch(), 60),
+        zoom: Math.max(map.getZoom() - 0.15, zoom),
+        pitch,
         bearing: hasHeading ? (heading as number) : map.getBearing(),
-        // `padding.bottom` shifts the visual center *down*, which moves
-        // the geographic center *up* in the viewport — i.e. the user
-        // dot ends up ~30 % from the bottom edge.
         padding: hasHeading
-          ? { top: 0, right: 0, bottom: Math.round(canvasH * 0.45), left: 0 }
+          ? { top: 0, right: 0, bottom: bottomPad, left: 0 }
           : { top: 0, right: 0, bottom: 0, left: 0 },
         duration: 600,
         essential: true,
       });
     }
-  }, [userPosition, followUser]);
+  }, [userPosition, followUser, nextManeuver?.distanceM]);
+
+  // ---- Sync the on-asphalt maneuver arrow ----
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !isLoadedRef.current) return;
+    const src = map.getSource("next-maneuver") as
+      | maplibregl.GeoJSONSource
+      | undefined;
+    if (!src) return;
+    if (!nextManeuver || !Number.isFinite(nextManeuver.lat) || !Number.isFinite(nextManeuver.lng)) {
+      src.setData({ type: "FeatureCollection", features: [] });
+      return;
+    }
+    // Rotate so the chevron lays "into" the new road. We prefer the
+    // bearing the courier will have *after* the turn (where the road
+    // they're aiming at goes), and fall back to bearingBefore if that's
+    // all we have. Subtract 0 — MapLibre's text-rotate is degrees
+    // clockwise from north, same as OSRM.
+    const rot =
+      nextManeuver.bearingAfter ??
+      nextManeuver.bearingBefore ??
+      0;
+    src.setData({
+      type: "Feature",
+      geometry: { type: "Point", coordinates: [nextManeuver.lng, nextManeuver.lat] },
+      properties: {
+        arrow: nextManeuver.arrow || "↑",
+        bearing: rot,
+        modifier: nextManeuver.modifier ?? "",
+      },
+    } as any);
+  }, [
+    nextManeuver?.lat,
+    nextManeuver?.lng,
+    nextManeuver?.arrow,
+    nextManeuver?.modifier,
+    nextManeuver?.bearingBefore,
+    nextManeuver?.bearingAfter,
+  ]);
 
   // Routes sync
   useEffect(() => {
