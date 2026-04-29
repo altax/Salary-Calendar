@@ -77,10 +77,13 @@ function buildBaseStyle(theme: "dark" | "light"): maplibregl.StyleSpecification 
         maxzoom: 22,
         // In dark mode we tone the bright OSM raster down so it matches the
         // app's dark theme without losing legibility on the e-bike tablet.
+        // In light mode we still desaturate + dim slightly so the bright
+        // asphalt doesn't dominate the frame and the route line + selected
+        // building stay the visual anchors.
         paint:
           theme === "dark"
             ? { "raster-brightness-min": 0.0, "raster-brightness-max": 0.55, "raster-saturation": -0.35, "raster-contrast": 0.1 }
-            : {},
+            : { "raster-brightness-min": 0.05, "raster-brightness-max": 0.82, "raster-saturation": -0.22, "raster-contrast": 0.05 },
       },
     ],
   };
@@ -99,6 +102,70 @@ function addOpenMapTilesVectorSource(map: MLMap) {
   } catch (err) {
     console.warn("[Map3D] failed to add openmaptiles source", err);
   }
+}
+
+// Extract the courier-relevant house number from a free-form Russian address
+// string like "ул. Будапештская, д. 12 корп. 3" or "Ленина 4А". The number is
+// what the courier looks for on the building wall, so we want the *first*
+// human-meaningful house identifier (with optional letter and corpus part)
+// and nothing else.
+function extractHouseNumber(address?: string | null): string | null {
+  if (!address) return null;
+  const compact = (s: string) => s.replace(/\s+/g, "");
+  // 1. Explicit "д. N" / "дом N" form.
+  const m1 = address.match(
+    /д(?:ом)?\.?\s*(\d{1,4}[а-яА-Яa-zA-Z]?(?:\/\d+)?(?:\s*к(?:орп)?\.?\s*\d+[а-яА-Я]?)?)/i,
+  );
+  if (m1) return compact(m1[1]);
+  // 2. Number directly after a comma — typical OSM display form.
+  const m2 = address.match(
+    /,\s*(\d{1,4}[а-яА-Яa-zA-Z]?(?:\/\d+)?(?:\s*к(?:орп)?\.?\s*\d+[а-яА-Я]?)?)/,
+  );
+  if (m2) return compact(m2[1]);
+  // 3. Anything that looks like a standalone short number (last resort).
+  const m3 = address.match(/\b(\d{1,4}[а-яА-Яa-zA-Z]?)\b/);
+  if (m3) return m3[1];
+  return null;
+}
+
+// Find the point on a polygon feature's outline that is closest (in plain
+// 2D lng/lat space — fine for the ~50 m distances we care about) to the
+// given coordinate. Used to anchor the "last mile" dashed line at the
+// building edge instead of its centre, which would otherwise draw a line
+// straight through the building.
+function closestPointOnFeature(
+  feature: GeoJSON.Feature,
+  lng: number,
+  lat: number,
+): [number, number] | null {
+  const g = feature.geometry as any;
+  let rings: number[][][] | null = null;
+  if (g?.type === "Polygon") rings = g.coordinates as number[][][];
+  else if (g?.type === "MultiPolygon")
+    rings = (g.coordinates as number[][][][]).flat() as number[][][];
+  if (!rings || rings.length === 0) return null;
+
+  let best: [number, number] | null = null;
+  let bestDist = Infinity;
+  for (const ring of rings) {
+    for (let i = 0; i < ring.length - 1; i++) {
+      const [ax, ay] = ring[i];
+      const [bx, by] = ring[i + 1];
+      const dx = bx - ax;
+      const dy = by - ay;
+      const len2 = dx * dx + dy * dy;
+      let t = len2 > 0 ? ((lng - ax) * dx + (lat - ay) * dy) / len2 : 0;
+      t = Math.max(0, Math.min(1, t));
+      const px = ax + t * dx;
+      const py = ay + t * dy;
+      const d2 = (px - lng) * (px - lng) + (py - lat) * (py - lat);
+      if (d2 < bestDist) {
+        bestDist = d2;
+        best = [px, py];
+      }
+    }
+  }
+  return best;
 }
 
 function jobColor(job: ResolvedJob | undefined, theme: "dark" | "light"): string {
@@ -278,6 +345,47 @@ function add3DBuildings(map: MLMap, theme: "dark" | "light") {
         "line-color": "#ffb300",
         "line-width": 2,
         "line-opacity": 0.9,
+      },
+    } as any);
+  }
+  // ---- House-number label on the selected building ----
+  // The single biggest thing courier needs to confirm "this is the right
+  // building" is the *number on the door*. We extract it from the delivery /
+  // pending order's address client-side and stuff it into the polygon's
+  // `housenumber` property (see the selection effect), then this symbol layer
+  // renders it big and orange-haloed at the polygon's pole-of-inaccessibility.
+  if (!map.getLayer("selected-building-number")) {
+    map.addLayer({
+      id: "selected-building-number",
+      type: "symbol",
+      source: "selected-building",
+      minzoom: 14,
+      layout: {
+        "text-field": ["coalesce", ["get", "housenumber"], ""],
+        "text-font": ["Noto Sans Bold"],
+        "text-size": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          14,
+          14,
+          17,
+          26,
+          19,
+          38,
+          21,
+          54,
+        ],
+        "text-allow-overlap": true,
+        "text-ignore-placement": true,
+        "text-padding": 0,
+        "symbol-placement": "point",
+      },
+      paint: {
+        "text-color": "#ffffff",
+        "text-halo-color": "#ff7a1a",
+        "text-halo-width": 2.5,
+        "text-halo-blur": 0.5,
       },
     } as any);
   }
@@ -518,6 +626,14 @@ export default function Map3D({
           type: "geojson",
           data: { type: "FeatureCollection", features: [] },
         });
+        // "Last mile": straight dashed orange line from the end of the
+        // road-snapped route to the actual delivery point (entrance / yard).
+        // This explicitly answers the courier's question "OK, I parked —
+        // now where do I walk?" instead of leaving them guessing.
+        map.addSource("last-mile", {
+          type: "geojson",
+          data: { type: "FeatureCollection", features: [] },
+        });
 
         map.addLayer({
           id: "pending-route-line",
@@ -531,17 +647,88 @@ export default function Map3D({
             "line-dasharray": [2, 1.2],
           },
         });
+
+        // ---- Active route: 3-layer stack for visibility ----
+        // Bottom: dark casing makes the route pop on both light asphalt
+        // and dark theme. Middle: bright cyan main line, fat enough to
+        // see at a glance even at high pitch. Top: directional arrows
+        // repeated along the line so you instantly know which way is
+        // forward without hunting for the user dot.
+        map.addLayer({
+          id: "active-route-casing",
+          type: "line",
+          source: "active-route",
+          layout: { "line-join": "round", "line-cap": "round" },
+          paint: {
+            "line-color": "#0c1f3a",
+            "line-width": [
+              "interpolate",
+              ["linear"],
+              ["zoom"],
+              12,
+              5,
+              16,
+              12,
+              19,
+              22,
+            ],
+            "line-opacity": 0.95,
+          },
+        });
         map.addLayer({
           id: "active-route-line",
           type: "line",
           source: "active-route",
           layout: { "line-join": "round", "line-cap": "round" },
           paint: {
-            "line-color": "#22c55e",
-            "line-width": 5,
-            "line-opacity": 0.95,
+            "line-color": "#38bdf8",
+            "line-width": [
+              "interpolate",
+              ["linear"],
+              ["zoom"],
+              12,
+              3,
+              16,
+              8,
+              19,
+              16,
+            ],
+            "line-opacity": 1,
           },
         });
+        map.addLayer({
+          id: "active-route-arrows",
+          type: "symbol",
+          source: "active-route",
+          minzoom: 14,
+          layout: {
+            "symbol-placement": "line",
+            "symbol-spacing": 80,
+            "text-field": "▶",
+            "text-font": ["Noto Sans Bold"],
+            "text-size": [
+              "interpolate",
+              ["linear"],
+              ["zoom"],
+              14,
+              11,
+              17,
+              16,
+              19,
+              22,
+            ],
+            "text-keep-upright": false,
+            "text-allow-overlap": true,
+            "text-ignore-placement": true,
+            "text-padding": 0,
+          },
+          paint: {
+            "text-color": "#0c1f3a",
+            "text-halo-color": "#ffffff",
+            "text-halo-width": 1.6,
+          },
+        } as any);
+
         map.addLayer({
           id: "traveled-route-line",
           type: "line",
@@ -551,6 +738,31 @@ export default function Map3D({
             "line-color": themeRef.current === "dark" ? "#52525b" : "#a1a1aa",
             "line-width": 3,
             "line-opacity": 0.7,
+          },
+        });
+
+        // Last-mile dashed line, drawn on top of everything else so it
+        // remains visible even when overlapping the active route.
+        map.addLayer({
+          id: "last-mile-line",
+          type: "line",
+          source: "last-mile",
+          layout: { "line-join": "round", "line-cap": "round" },
+          paint: {
+            "line-color": "#ff7a1a",
+            "line-width": [
+              "interpolate",
+              ["linear"],
+              ["zoom"],
+              14,
+              3,
+              17,
+              5,
+              19,
+              7,
+            ],
+            "line-opacity": 0.95,
+            "line-dasharray": [1.4, 1.2],
           },
         });
       } catch (err) {
@@ -826,14 +1038,16 @@ export default function Map3D({
     const map = mapRef.current;
     if (!map || !isLoadedRef.current) return;
 
-    // Resolve the selection to a [lng, lat] target.
-    let target: { lng: number; lat: number } | null = null;
+    // Resolve the selection to a [lng, lat] target *and* the human-readable
+    // address — we need the address to extract the house number for the big
+    // orange label drawn on top of the selected polygon.
+    let target: { lng: number; lat: number; address?: string } | null = null;
     if (selectedId) {
       const d = deliveries.find((x) => x.id === selectedId);
-      if (d) target = { lng: d.lng, lat: d.lat };
+      if (d) target = { lng: d.lng, lat: d.lat, address: d.address };
       if (!target) {
         const p = pending.find((x) => x.id === selectedId);
-        if (p) target = { lng: p.lng, lat: p.lat };
+        if (p) target = { lng: p.lng, lat: p.lat, address: p.address };
       }
     }
 
@@ -842,6 +1056,10 @@ export default function Map3D({
         | maplibregl.GeoJSONSource
         | undefined;
       src?.setData({ type: "FeatureCollection", features: [] });
+      const lm = map.getSource("last-mile") as
+        | maplibregl.GeoJSONSource
+        | undefined;
+      lm?.setData({ type: "FeatureCollection", features: [] });
     };
 
     if (!target) {
@@ -849,6 +1067,7 @@ export default function Map3D({
       return;
     }
     const t = target;
+    const houseNumber = extractHouseNumber(t.address);
 
     const findBuildingAtTarget = (): GeoJSON.Feature | null => {
       // The 3d-buildings layer must exist before we can query it.
@@ -918,7 +1137,41 @@ export default function Map3D({
       if (!src) return false;
       const feature = findBuildingAtTarget();
       if (feature) {
+        // Inject the courier-readable house number so the symbol layer
+        // `selected-building-number` can render it big over the polygon.
+        if (houseNumber) {
+          feature.properties = { ...(feature.properties ?? {}), housenumber: houseNumber };
+        }
         src.setData({ type: "FeatureCollection", features: [feature] });
+        // Also draw the "last mile" — a straight dashed line from the
+        // closest point on the building footprint (parking edge) to the
+        // exact target coordinate (entrance / yard pin). If we don't have
+        // a building polygon, skip — the marker itself is enough.
+        const lm = map.getSource("last-mile") as
+          | maplibregl.GeoJSONSource
+          | undefined;
+        if (lm) {
+          const edge = closestPointOnFeature(feature, t.lng, t.lat);
+          if (edge) {
+            const dx = edge[0] - t.lng;
+            const dy = edge[1] - t.lat;
+            // Skip the dashed line if the entrance is essentially on the
+            // building edge already — drawing a 1-meter dash adds noise.
+            const distDeg2 = dx * dx + dy * dy;
+            if (distDeg2 > 1e-9) {
+              lm.setData({
+                type: "Feature",
+                geometry: {
+                  type: "LineString",
+                  coordinates: [edge, [t.lng, t.lat]],
+                },
+                properties: {},
+              } as any);
+            } else {
+              lm.setData({ type: "FeatureCollection", features: [] });
+            }
+          }
+        }
         return true;
       }
       return false;
