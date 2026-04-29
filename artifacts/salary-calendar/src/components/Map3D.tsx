@@ -230,6 +230,57 @@ function add3DBuildings(map: MLMap, theme: "dark" | "light") {
     } as any,
     beforeId,
   );
+
+  // ---- Selected-building highlight ----
+  // We don't toggle feature-state on the original vector tiles because
+  // openmaptiles building features don't reliably carry stable feature IDs
+  // across tiles (the same building can appear as multiple features with
+  // different IDs at tile borders). Instead we keep a tiny GeoJSON source
+  // with the selected polygon's geometry and render it as a second
+  // fill-extrusion layer on top, painted in bright orange.
+  if (!map.getSource("selected-building")) {
+    map.addSource("selected-building", {
+      type: "geojson",
+      data: { type: "FeatureCollection", features: [] },
+    });
+  }
+  if (!map.getLayer("selected-building-extrusion")) {
+    map.addLayer({
+      id: "selected-building-extrusion",
+      type: "fill-extrusion",
+      source: "selected-building",
+      minzoom: 14,
+      paint: {
+        // Bright orange on dark theme, slightly deeper on light.
+        "fill-extrusion-color": isDark ? "#ff7a1a" : "#ea580c",
+        // Slightly taller than the original so it visually "lifts" above
+        // the rest of the city (~+4 m or 4% of height, whichever is larger).
+        "fill-extrusion-height": [
+          "max",
+          ["+", ["coalesce", ["get", "render_height"], 8], 4],
+          ["*", ["coalesce", ["get", "render_height"], 8], 1.04],
+        ],
+        "fill-extrusion-base": ["coalesce", ["get", "render_min_height"], 0],
+        "fill-extrusion-opacity": 0.92,
+        "fill-extrusion-vertical-gradient": true,
+      },
+    } as any);
+  }
+  if (!map.getLayer("selected-building-outline")) {
+    // Thin glowing outline at the building's footprint to make it pop on the
+    // ground-plane when the camera is high (pitch ≈ 0).
+    map.addLayer({
+      id: "selected-building-outline",
+      type: "line",
+      source: "selected-building",
+      minzoom: 14,
+      paint: {
+        "line-color": "#ffb300",
+        "line-width": 2,
+        "line-opacity": 0.9,
+      },
+    } as any);
+  }
 }
 
 export type Map3DProps = {
@@ -337,7 +388,20 @@ export default function Map3D({
           failIfMajorPerformanceCaveat: false,
         },
         attributionControl: { compact: true },
-        maxPitch: 75,
+        maxPitch: 78,
+        // ---- Loading-speed knobs ----
+        // `fadeDuration: 0` removes the 300 ms cross-fade MapLibre normally
+        // plays when a new tile arrives — on slow networks the screen can
+        // sit half-blank for almost a second per tile, which feels broken.
+        fadeDuration: 0,
+        // Browsers cap simultaneous fetches per origin at ~6; bumping this
+        // lets MapLibre pipeline more requests so the visible viewport
+        // fills in noticeably faster on first load.
+        maxParallelImageRequests: 32,
+        // Tiles served by our proxy already have long cache headers, and
+        // re-requesting expired ones every few minutes just stalls the
+        // network for no visual gain.
+        refreshExpiredTiles: false,
         // Any URL that points at the OpenFreeMap upstream (e.g. the
         // openmaptiles vector source we add later for 3D buildings, or
         // glyph URLs in the inline style) must be routed through our
@@ -664,10 +728,25 @@ export default function Map3D({
       userMarkerRef.current.getElement().innerHTML = html;
     }
     if (followUser) {
+      // POV-style chase camera: high pitch, course-up bearing (when we
+      // have a real heading), and the user marker pushed to the bottom
+      // third of the screen via `padding` so the road *ahead* of us
+      // dominates the frame — same composition as a car-nav app.
+      const canvasH = map.getCanvas().clientHeight || 600;
+      const hasHeading = heading != null && Number.isFinite(heading);
       map.easeTo({
         center: [userPosition.lng, userPosition.lat],
-        zoom: Math.max(map.getZoom(), 17),
+        zoom: Math.max(map.getZoom(), hasHeading ? 18 : 17),
+        pitch: hasHeading ? 72 : Math.max(map.getPitch(), 60),
+        bearing: hasHeading ? (heading as number) : map.getBearing(),
+        // `padding.bottom` shifts the visual center *down*, which moves
+        // the geographic center *up* in the viewport — i.e. the user
+        // dot ends up ~30 % from the bottom edge.
+        padding: hasHeading
+          ? { top: 0, right: 0, bottom: Math.round(canvasH * 0.45), left: 0 }
+          : { top: 0, right: 0, bottom: 0, left: 0 },
         duration: 600,
+        essential: true,
       });
     }
   }, [userPosition, followUser]);
@@ -733,6 +812,135 @@ export default function Map3D({
       essential: true,
     });
   }, [flyTo]);
+
+  // ---- Highlight the selected building ----
+  // Whenever a delivery / pending stop is selected we look up its lat/lng,
+  // ask the renderer "which building footprint sits under this point?", and
+  // copy that polygon into the `selected-building` GeoJSON source so the
+  // orange extrusion layer added in `add3DBuildings` lights it up.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !isLoadedRef.current) return;
+
+    // Resolve the selection to a [lng, lat] target.
+    let target: { lng: number; lat: number } | null = null;
+    if (selectedId) {
+      const d = deliveries.find((x) => x.id === selectedId);
+      if (d) target = { lng: d.lng, lat: d.lat };
+      if (!target) {
+        const p = pending.find((x) => x.id === selectedId);
+        if (p) target = { lng: p.lng, lat: p.lat };
+      }
+    }
+
+    const clearSelection = () => {
+      const src = map.getSource("selected-building") as
+        | maplibregl.GeoJSONSource
+        | undefined;
+      src?.setData({ type: "FeatureCollection", features: [] });
+    };
+
+    if (!target) {
+      clearSelection();
+      return;
+    }
+    const t = target;
+
+    const findBuildingAtTarget = (): GeoJSON.Feature | null => {
+      // The 3d-buildings layer must exist before we can query it.
+      if (!map.getLayer("3d-buildings")) return null;
+      const point = map.project([t.lng, t.lat]);
+      // Direct hit first…
+      let features = map.queryRenderedFeatures(point, {
+        layers: ["3d-buildings"],
+      });
+      // …then expand the search ring (delivery markers can sit on the
+      // pavement next to the building, not on the polygon itself).
+      if (features.length === 0) {
+        const radii = [12, 28, 60];
+        for (const r of radii) {
+          features = map.queryRenderedFeatures(
+            [
+              [point.x - r, point.y - r],
+              [point.x + r, point.y + r],
+            ],
+            { layers: ["3d-buildings"] },
+          );
+          if (features.length > 0) break;
+        }
+      }
+      if (features.length === 0) return null;
+      // Pick the building whose centroid (approximated by the bbox of its
+      // first ring) is closest to the click point — avoids picking a giant
+      // courtyard polygon when a small house is right under the cursor.
+      let best = features[0];
+      let bestDist = Infinity;
+      for (const f of features) {
+        const g: any = f.geometry;
+        const ring: number[][] | undefined =
+          g?.type === "Polygon"
+            ? g.coordinates?.[0]
+            : g?.type === "MultiPolygon"
+              ? g.coordinates?.[0]?.[0]
+              : undefined;
+        if (!ring || ring.length === 0) continue;
+        let cx = 0;
+        let cy = 0;
+        for (const [lx, ly] of ring) {
+          cx += lx;
+          cy += ly;
+        }
+        cx /= ring.length;
+        cy /= ring.length;
+        const dx = cx - t.lng;
+        const dy = cy - t.lat;
+        const dist = dx * dx + dy * dy;
+        if (dist < bestDist) {
+          bestDist = dist;
+          best = f;
+        }
+      }
+      return {
+        type: "Feature",
+        geometry: best.geometry as GeoJSON.Geometry,
+        properties: { ...(best.properties ?? {}) },
+      };
+    };
+
+    const apply = () => {
+      const src = map.getSource("selected-building") as
+        | maplibregl.GeoJSONSource
+        | undefined;
+      if (!src) return false;
+      const feature = findBuildingAtTarget();
+      if (feature) {
+        src.setData({ type: "FeatureCollection", features: [feature] });
+        return true;
+      }
+      return false;
+    };
+
+    // Clear stale highlight while we look for the new one.
+    clearSelection();
+
+    // Try immediately; if the building tile around `target` isn't loaded
+    // yet (we just changed selection and the camera is still flying) wait
+    // for the next idle frame and try again — up to a small number of
+    // retries so we don't leak listeners forever.
+    if (apply()) return;
+
+    let attempts = 0;
+    const onIdle = () => {
+      attempts += 1;
+      if (apply() || attempts >= 4) {
+        map.off("idle", onIdle);
+      }
+    };
+    map.on("idle", onIdle);
+    return () => {
+      map.off("idle", onIdle);
+    };
+  }, [selectedId, deliveries, pending]);
 
   return (
     // `min-h-[520px]` is a *defensive* floor: even if a grandparent in the
