@@ -188,7 +188,6 @@ export default function StreetView() {
             title="Mapillary street view"
             className="absolute inset-0 w-full h-full border-0"
             allow="fullscreen; accelerometer; gyroscope"
-            allowFullScreen
           />
         )}
 
