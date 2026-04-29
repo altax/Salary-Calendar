@@ -35,7 +35,12 @@ const TILE_ATTR =
 const OSM_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
 const SAT_ATTR = 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community';
 
-export type MapLayerMode = "default" | "detail" | "satellite" | "3d";
+export type MapLayerMode =
+  | "default"
+  | "detail"
+  | "satellite"
+  | "3d"
+  | "panorama";
 
 function jobColor(job: ResolvedJob | undefined, theme: "dark" | "light"): string {
   if (job?.color) return job.color;

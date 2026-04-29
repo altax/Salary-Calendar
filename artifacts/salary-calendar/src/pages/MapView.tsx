@@ -123,7 +123,10 @@ export default function MapView() {
     if (typeof window !== "undefined") {
       const params = new URLSearchParams(window.location.search);
       const fromUrl = params.get("layer") as MapLayerMode | null;
-      if (fromUrl && ["default", "detail", "satellite", "3d"].includes(fromUrl)) {
+      if (
+        fromUrl &&
+        ["default", "detail", "satellite", "3d", "panorama"].includes(fromUrl)
+      ) {
         try { localStorage.setItem("map-layer", fromUrl); } catch {}
         return fromUrl;
       }
@@ -144,12 +147,14 @@ export default function MapView() {
     detail: "🏙",
     satellite: "🛰",
     "3d": "3D",
+    panorama: "👁",
   };
   const LAYER_TITLE: Record<MapLayerMode, string> = {
     default: "Стиль: тёмная/светлая карта",
     detail: "Стиль: детальная OSM (подъезды, все улицы)",
     satellite: "Стиль: спутник + подписи",
     "3d": "Стиль: 3D-здания + панорамы (Mapillary)",
+    panorama: "Стиль: фото-панорама (доступна в режиме поездки)",
   };
 
   // Mapillary panorama modal state

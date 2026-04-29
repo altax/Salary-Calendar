@@ -8,31 +8,93 @@ import {
   type LngLat,
 } from "@/lib/yandex-pano";
 
+/**
+ * A 3D ground spot painted on the asphalt at (bearing, distance) from
+ * the panorama centre. Used to draw the route the courier should follow.
+ */
+export type GroundDot = {
+  /** World heading in degrees (clockwise from north). */
+  bearingDeg: number;
+  /** Distance in metres from the panorama centre. */
+  distanceM: number;
+  color: string;
+  /** Diameter in metres (default 0.6). */
+  sizeM?: number;
+};
+
+/**
+ * A vertical pin marker (e.g. next delivery, next maneuver). Renders a
+ * narrow rectangle standing on the ground at (bearing, distance).
+ */
+export type GroundPin = {
+  bearingDeg: number;
+  distanceM: number;
+  color: string;
+  label?: string;
+  /** Height in metres (default 4). */
+  heightM?: number;
+};
+
 type Props = {
   pano: LoadedPano;
   onNavigate: (next: LoadedPano) => void;
   onError?: (msg: string) => void;
+  /**
+   * If provided, the camera yaw is set to this world heading every time
+   * the panorama changes. The user can still drag freely after the
+   * initial snap. Useful for "windshield camera" mode while driving.
+   */
+  initialYawDegrees?: number;
+  /** Continuous trail of ground dots to render (e.g. route polyline). */
+  routeDots?: GroundDot[];
+  /** Vertical pin markers (e.g. delivery destinations). */
+  pins?: GroundPin[];
+  /** Show built-in arrows that walk the user to neighbouring panoramas. */
+  showThoroughfareArrows?: boolean;
 };
+
+// Eye height we assume Yandex's panorama camera was at (≈ car roof). All
+// ground geometry is placed at y = -EYE_HEIGHT_M so it lands on the
+// asphalt visible in the photo.
+const EYE_HEIGHT_M = 2;
 
 /**
  * Equirectangular panorama viewer rendered via Three.js. The image is
- * stitched from 256×256 JPEG tiles served by Yandex (proxied through
- * our origin) and applied to an inverted sphere whose centre is the
- * camera. Mouse / touch drag yaws & pitches the camera; the wheel zooms
- * the FOV; clickable arrows on the ground walk the courier to the next
- * connected panorama.
+ * stitched from 256×256 JPEG tiles served by Yandex (proxied through our
+ * origin) and applied to an inverted sphere whose centre is the camera.
  *
- * Key coordinate convention:
- *   World yaw is in degrees, measured clockwise from north. The image's
- *   centre column points to `pano.originYaw` in world coords, so to
- *   align the sphere with real geography we rotate the mesh by that
- *   offset on the Y axis.
+ * Drag yaws / pitches the camera; the wheel zooms the FOV; optional
+ * arrows on the ground let the user click to walk to a neighbouring
+ * panorama.
+ *
+ * Coordinate convention:
+ *   World yaw is in degrees clockwise from north. The image's centre
+ *   column points to `pano.originYaw` in world coords, so we rotate the
+ *   sphere mesh by that offset on the Y axis. After this, "camera yaw =
+ *   world yaw": setting the camera to look at yaw = 90° points it east.
+ *   Ground geometry placed at (sin(yaw)·d, -2, -cos(yaw)·d) ends up at
+ *   the right pixel on the asphalt.
  */
-export function YandexPanoramaViewer({ pano, onNavigate, onError }: Props) {
+export function YandexPanoramaViewer({
+  pano,
+  onNavigate,
+  onError,
+  initialYawDegrees,
+  routeDots,
+  pins,
+  showThoroughfareArrows = true,
+}: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [tilesProgress, setTilesProgress] = useState({ done: 0, total: 0 });
   const [navigating, setNavigating] = useState(false);
   const [glError, setGlError] = useState<string | null>(null);
+
+  // Ref bag so we can mutate scene contents from non-effect callbacks
+  // without tearing the renderer down.
+  const sceneRef = useRef<{
+    scene: THREE.Scene;
+    decorationsGroup: THREE.Group;
+  } | null>(null);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -62,16 +124,10 @@ export function YandexPanoramaViewer({ pano, onNavigate, onError }: Props) {
     );
     camera.position.set(0, 0, 0);
 
-    // Sphere is rendered from the inside, so we flip its scale on X
-    // (mirroring) instead of inverting normals. This keeps the texture
-    // visually correct (text not mirrored) while letting the camera see
-    // the inner surface.
     const sphereRadius = 100;
     const sphereGeometry = new THREE.SphereGeometry(sphereRadius, 64, 32);
     sphereGeometry.scale(-1, 1, 1);
 
-    // Initial low-res placeholder (single neutral colour) so we can show
-    // SOMETHING immediately while real tiles stream in.
     const placeholderTex = new THREE.DataTexture(
       new Uint8Array([20, 20, 24, 255]),
       1,
@@ -81,14 +137,10 @@ export function YandexPanoramaViewer({ pano, onNavigate, onError }: Props) {
     placeholderTex.needsUpdate = true;
     const sphereMaterial = new THREE.MeshBasicMaterial({ map: placeholderTex });
     const sphere = new THREE.Mesh(sphereGeometry, sphereMaterial);
-    // Rotate the sphere so the image's centre column aligns with the
-    // world-relative yaw it was captured at. After this, looking down
-    // -Z (camera default) means looking north.
     sphere.rotation.y = THREE.MathUtils.degToRad(pano.originYaw);
     scene.add(sphere);
 
-    // ── Pick the zoom level that best fits the device, then load tiles
-    // into a single canvas which becomes the sphere texture.
+    // Tile streaming → CanvasTexture.
     const targetWidth =
       Math.min(4096, Math.max(2048, container.clientWidth * window.devicePixelRatio * 4));
     const zoom = pickZoomLevel(pano.zooms, targetWidth);
@@ -137,7 +189,6 @@ export function YandexPanoramaViewer({ pano, onNavigate, onError }: Props) {
         img.src = tileUrl(pano.imageId, zoom.level, cx, cy);
       });
 
-    // Limited parallelism so we don't open dozens of concurrent connections.
     const queue: Array<[number, number]> = [];
     for (let cy = 0; cy < rows; cy++) {
       for (let cx = 0; cx < cols; cx++) queue.push([cx, cy]);
@@ -153,35 +204,18 @@ export function YandexPanoramaViewer({ pano, onNavigate, onError }: Props) {
     });
     Promise.all(workers).catch((e) => onError?.(String(e)));
 
-    // ── Navigation arrows on the ground. Each thoroughfare gets a small
-    // diamond sprite at its world yaw, sitting just below the horizon.
-    const arrowsGroup = new THREE.Group();
-    const arrowMeshes: Array<{ mesh: THREE.Mesh; oid: string }> = [];
-    const arrowGeom = new THREE.PlaneGeometry(8, 8);
-    for (const tf of pano.thoroughfares) {
-      const arrowTex = makeArrowTexture();
-      const arrowMat = new THREE.MeshBasicMaterial({
-        map: arrowTex,
-        transparent: true,
-        depthWrite: false,
-        side: THREE.DoubleSide,
-      });
-      const mesh = new THREE.Mesh(arrowGeom, arrowMat);
-      // Place the arrow on the ground (y = -8) at distance 16 from the
-      // camera in the world yaw direction. Yaw 0 = north (-Z), 90 = east (+X).
-      const yawRad = THREE.MathUtils.degToRad(tf.yaw);
-      const r = 16;
-      mesh.position.set(Math.sin(yawRad) * r, -8, -Math.cos(yawRad) * r);
-      // Lay the arrow flat and rotate so the tip points away from camera.
-      mesh.rotation.x = -Math.PI / 2;
-      mesh.rotation.z = -yawRad;
-      arrowsGroup.add(mesh);
-      arrowMeshes.push({ mesh, oid: tf.oid });
-    }
-    scene.add(arrowsGroup);
+    // ── Decorations group: arrows, route dots, pins. We rebuild this
+    // group whenever those props change without re-running the heavy
+    // sphere-loading effect.
+    const decorationsGroup = new THREE.Group();
+    scene.add(decorationsGroup);
 
-    // ── Camera controls. Track yaw/pitch in radians.
-    let yaw = 0;
+    sceneRef.current = { scene, decorationsGroup };
+
+    // ── Camera controls.
+    let yaw = initialYawDegrees != null
+      ? THREE.MathUtils.degToRad(initialYawDegrees)
+      : 0;
     let pitch = 0;
     let fov = 75;
     let dragging = false;
@@ -191,7 +225,6 @@ export function YandexPanoramaViewer({ pano, onNavigate, onError }: Props) {
     const updateCamera = () => {
       camera.fov = fov;
       camera.updateProjectionMatrix();
-      // Convert yaw/pitch to a look direction.
       const cosP = Math.cos(pitch);
       const dir = new THREE.Vector3(
         Math.sin(yaw) * cosP,
@@ -214,11 +247,9 @@ export function YandexPanoramaViewer({ pano, onNavigate, onError }: Props) {
       const dy = e.clientY - lastY;
       lastX = e.clientX;
       lastY = e.clientY;
-      // Sensitivity scales with current FOV so zoomed-in feels natural.
       const k = (fov / 75) * 0.005;
       yaw -= dx * k;
       pitch += dy * k;
-      // Clamp pitch to avoid flipping.
       pitch = Math.max(-Math.PI / 2 + 0.05, Math.min(Math.PI / 2 - 0.05, pitch));
       updateCamera();
     };
@@ -233,25 +264,25 @@ export function YandexPanoramaViewer({ pano, onNavigate, onError }: Props) {
       updateCamera();
     };
 
-    // Click → raycast for arrows.
+    // Click → raycast for clickable arrows in the decorations group.
     const raycaster = new THREE.Raycaster();
     const ndc = new THREE.Vector2();
     const onClick = (e: MouseEvent) => {
       const rect = renderer.domElement.getBoundingClientRect();
       const x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
       const y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-      // Avoid treating drags as clicks.
       ndc.set(x, y);
       raycaster.setFromCamera(ndc, camera);
-      const hits = raycaster.intersectObjects(
-        arrowMeshes.map((a) => a.mesh),
-        false,
-      );
+      const targets: THREE.Object3D[] = [];
+      decorationsGroup.traverse((obj) => {
+        if (obj.userData?.clickOid) targets.push(obj);
+      });
+      const hits = raycaster.intersectObjects(targets, false);
       if (hits.length === 0) return;
-      const found = arrowMeshes.find((a) => a.mesh === hits[0].object);
-      if (!found || disposed) return;
+      const oid = hits[0].object.userData?.clickOid as string | undefined;
+      if (!oid || disposed) return;
       setNavigating(true);
-      fetchPanoByOid(found.oid)
+      fetchPanoByOid(oid)
         .then((next) => {
           if (next && !disposed) onNavigate(next);
           setNavigating(false);
@@ -272,7 +303,6 @@ export function YandexPanoramaViewer({ pano, onNavigate, onError }: Props) {
     dom.addEventListener("wheel", onWheel, { passive: false });
     dom.addEventListener("click", onClick);
 
-    // Resize observer keeps the renderer matched to its container.
     const ro = new ResizeObserver(() => {
       if (!container) return;
       const w = container.clientWidth;
@@ -283,14 +313,16 @@ export function YandexPanoramaViewer({ pano, onNavigate, onError }: Props) {
     });
     ro.observe(container);
 
-    // Animation loop. Pulse arrow opacity so they're visibly clickable.
     let raf = 0;
     const tick = () => {
       const t = performance.now() * 0.003;
       const pulse = 0.7 + 0.3 * Math.sin(t);
-      for (const a of arrowMeshes) {
-        (a.mesh.material as THREE.MeshBasicMaterial).opacity = pulse;
-      }
+      decorationsGroup.traverse((obj) => {
+        if (obj.userData?.pulse) {
+          const m = (obj as THREE.Mesh).material as THREE.MeshBasicMaterial;
+          m.opacity = pulse;
+        }
+      });
       renderer.render(scene, camera);
       raf = requestAnimationFrame(tick);
     };
@@ -310,11 +342,14 @@ export function YandexPanoramaViewer({ pano, onNavigate, onError }: Props) {
       sphereMaterial.dispose();
       fullTex.dispose();
       placeholderTex.dispose();
-      arrowGeom.dispose();
-      for (const a of arrowMeshes) {
-        (a.mesh.material as THREE.MeshBasicMaterial).map?.dispose();
-        (a.mesh.material as THREE.MeshBasicMaterial).dispose();
-      }
+      decorationsGroup.traverse((obj) => {
+        const mesh = obj as THREE.Mesh;
+        mesh.geometry?.dispose?.();
+        const mat = mesh.material as THREE.Material | THREE.Material[] | undefined;
+        if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
+        else mat?.dispose?.();
+      });
+      sceneRef.current = null;
       renderer.dispose();
       if (renderer.domElement.parentNode === container) {
         container.removeChild(renderer.domElement);
@@ -322,6 +357,103 @@ export function YandexPanoramaViewer({ pano, onNavigate, onError }: Props) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pano.imageId]);
+
+  // ── Decoration sync. Rebuild arrows / dots / pins whenever the props
+  // change, without disturbing the heavy sphere texture pipeline.
+  useEffect(() => {
+    const ctx = sceneRef.current;
+    if (!ctx) return;
+    const { decorationsGroup } = ctx;
+
+    // Tear down whatever was there.
+    while (decorationsGroup.children.length > 0) {
+      const obj = decorationsGroup.children[0] as THREE.Mesh;
+      decorationsGroup.remove(obj);
+      obj.geometry?.dispose?.();
+      const mat = obj.material as THREE.Material | THREE.Material[] | undefined;
+      if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
+      else mat?.dispose?.();
+    }
+
+    // Route trail: small flat yellow disks on the asphalt.
+    if (routeDots && routeDots.length > 0) {
+      const baseGeom = new THREE.CircleGeometry(0.5, 24);
+      for (const d of routeDots) {
+        const yawRad = THREE.MathUtils.degToRad(d.bearingDeg);
+        const r = Math.min(80, Math.max(1.5, d.distanceM));
+        const x = Math.sin(yawRad) * r;
+        const z = -Math.cos(yawRad) * r;
+        const mat = new THREE.MeshBasicMaterial({
+          color: new THREE.Color(d.color),
+          transparent: true,
+          opacity: 0.85,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+        });
+        const size = (d.sizeM ?? 0.6) * Math.max(0.6, r / 8);
+        const mesh = new THREE.Mesh(baseGeom, mat);
+        mesh.scale.setScalar(size);
+        mesh.position.set(x, -EYE_HEIGHT_M + 0.05, z);
+        mesh.rotation.x = -Math.PI / 2;
+        decorationsGroup.add(mesh);
+      }
+    }
+
+    // Vertical pins for delivery destinations / depot.
+    if (pins && pins.length > 0) {
+      for (const p of pins) {
+        const yawRad = THREE.MathUtils.degToRad(p.bearingDeg);
+        const r = Math.min(80, Math.max(2, p.distanceM));
+        const x = Math.sin(yawRad) * r;
+        const z = -Math.cos(yawRad) * r;
+        const h = p.heightM ?? 4;
+        // The pin: a thin cylinder + a sphere head, tinted to the pin colour.
+        const stickGeom = new THREE.CylinderGeometry(0.08, 0.08, h, 12);
+        const stickMat = new THREE.MeshBasicMaterial({
+          color: new THREE.Color(p.color),
+          transparent: true,
+          opacity: 0.95,
+        });
+        const stick = new THREE.Mesh(stickGeom, stickMat);
+        stick.position.set(x, -EYE_HEIGHT_M + h / 2, z);
+        decorationsGroup.add(stick);
+
+        const headGeom = new THREE.SphereGeometry(0.6, 16, 12);
+        const headMat = new THREE.MeshBasicMaterial({
+          color: new THREE.Color(p.color),
+          transparent: true,
+          opacity: 0.95,
+        });
+        const head = new THREE.Mesh(headGeom, headMat);
+        head.position.set(x, -EYE_HEIGHT_M + h, z);
+        head.userData.pulse = true;
+        decorationsGroup.add(head);
+      }
+    }
+
+    // Built-in thoroughfare arrows (free-explore mode).
+    if (showThoroughfareArrows) {
+      const arrowGeom = new THREE.PlaneGeometry(8, 8);
+      for (const tf of pano.thoroughfares) {
+        const arrowTex = makeArrowTexture();
+        const arrowMat = new THREE.MeshBasicMaterial({
+          map: arrowTex,
+          transparent: true,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+        });
+        const mesh = new THREE.Mesh(arrowGeom, arrowMat);
+        const yawRad = THREE.MathUtils.degToRad(tf.yaw);
+        const r = 16;
+        mesh.position.set(Math.sin(yawRad) * r, -EYE_HEIGHT_M, -Math.cos(yawRad) * r);
+        mesh.rotation.x = -Math.PI / 2;
+        mesh.rotation.z = -yawRad;
+        mesh.userData.clickOid = tf.oid;
+        mesh.userData.pulse = true;
+        decorationsGroup.add(mesh);
+      }
+    }
+  }, [pano.imageId, routeDots, pins, showThoroughfareArrows, pano.thoroughfares]);
 
   const tilePct =
     tilesProgress.total === 0
@@ -359,11 +491,6 @@ export function YandexPanoramaViewer({ pano, onNavigate, onError }: Props) {
   );
 }
 
-/**
- * Generate a small canvas-based arrow texture for the navigation marker.
- * Returns a fresh THREE.Texture each call so each arrow can fade
- * independently.
- */
 function makeArrowTexture(): THREE.Texture {
   const size = 128;
   const c = document.createElement("canvas");
@@ -371,7 +498,6 @@ function makeArrowTexture(): THREE.Texture {
   c.height = size;
   const g = c.getContext("2d")!;
   g.clearRect(0, 0, size, size);
-  // White arrow with subtle dark outline so it reads on any ground colour.
   g.beginPath();
   g.moveTo(size / 2, size * 0.1);
   g.lineTo(size * 0.85, size * 0.85);

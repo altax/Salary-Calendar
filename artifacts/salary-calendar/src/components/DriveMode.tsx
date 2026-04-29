@@ -4,6 +4,7 @@ import { useGeolocation, type GeoPosition } from "@/lib/geolocation";
 import { type PendingOrder } from "@/lib/deliveries";
 import type { Depot, ResolvedJob } from "@/lib/store";
 import Map3D from "@/components/Map3D";
+import DriveModePanorama from "@/components/DriveModePanorama";
 import DeliveryMap, {
   type ManeuverMarker,
   type RouteLegSegment,
@@ -1092,7 +1093,22 @@ export default function DriveMode({
 
       {/* Map */}
       <div className="flex-1 min-h-0 relative">
-        {layerMode === "3d" ? (
+        {layerMode === "panorama" ? (
+          // Real-photo windshield camera: pulls Yandex panoramas at the
+          // courier's GPS position, paints the upcoming route on the
+          // asphalt as a yellow trail of dots, plants a tall pin at the
+          // next destination. Auto-refreshes the underlying panorama
+          // when the courier walks more than ~18 m from the centre of
+          // the currently displayed pano.
+          <DriveModePanorama
+            position={position ? { lat: position.lat, lng: position.lng } : null}
+            routeIndex={routeIndex}
+            progress={progress}
+            pending={pending}
+            depot={depot}
+            returning={mode === "returning"}
+          />
+        ) : layerMode === "3d" ? (
           // 3D POV mode: MapLibre with the chase camera enabled while we
           // have a GPS fix (high pitch + course-up bearing), the active
           // stop fed in as `selectedId` so its building extrudes in
@@ -1167,7 +1183,13 @@ export default function DriveMode({
           {onLayerChange && (
             <button
               onClick={() => {
-                const order: MapLayerMode[] = ["default", "detail", "satellite", "3d"];
+                const order: MapLayerMode[] = [
+                  "default",
+                  "detail",
+                  "satellite",
+                  "3d",
+                  "panorama",
+                ];
                 const idx = order.indexOf(layerMode);
                 const next = order[(idx + 1) % order.length];
                 onLayerChange(next);
@@ -1175,6 +1197,7 @@ export default function DriveMode({
               className={cn(
                 "w-9 h-9 rounded-md border border-border bg-card/95 backdrop-blur text-[14px] flex items-center justify-center shadow-md hover:bg-muted transition-colors font-bold",
                 layerMode === "3d" && "bg-blue-600 text-white border-blue-600",
+                layerMode === "panorama" && "bg-amber-500 text-black border-amber-500",
               )}
               title={
                 layerMode === "default"
@@ -1183,7 +1206,9 @@ export default function DriveMode({
                     ? "Стиль: детальная OSM"
                     : layerMode === "satellite"
                       ? "Стиль: спутник"
-                      : "Стиль: 3D POV"
+                      : layerMode === "3d"
+                        ? "Стиль: 3D POV"
+                        : "Стиль: фото-панорама вдоль маршрута"
               }
             >
               {layerMode === "default"
@@ -1192,7 +1217,9 @@ export default function DriveMode({
                   ? "🏙"
                   : layerMode === "satellite"
                     ? "🛰"
-                    : "3D"}
+                    : layerMode === "3d"
+                      ? "3D"
+                      : "👁"}
             </button>
           )}
           <button
