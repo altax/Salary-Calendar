@@ -1,6 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Viewer } from "mapillary-js";
-import "mapillary-js/dist/mapillary.css";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { cn } from "@/lib/utils";
 import { findNearestImage, type FoundImage } from "@/lib/mapillary-search";
@@ -15,18 +13,32 @@ const SEARCH_RADIUS_M = 800;
 type Status =
   | { kind: "idle" }
   | { kind: "searching" }
-  | { kind: "loading"; found: FoundImage }
-  | { kind: "loaded"; imageId: string; isPano: boolean }
+  | { kind: "loaded"; found: FoundImage }
   | { kind: "no-imagery" }
   | { kind: "error"; message: string };
 
+/**
+ * Build the URL for Mapillary's official embedded panorama viewer.
+ * The embed page (https://www.mapillary.com/embed) is a full-blown
+ * Angular SPA that runs THEIR own 360° photo viewer — same one you'd
+ * see on mapillary.com itself: drag-to-rotate, click navigation arrows
+ * on the ground to move between connected images, zoom, fullscreen,
+ * compass, the lot. It uses Mapillary's own session/auth on their
+ * domain, so we don't need our app's API token to have read scope.
+ */
+function buildEmbedUrl(imageId: string) {
+  const params = new URLSearchParams({
+    image_key: imageId,
+    style: "photo",
+    map_style: "Mapillary streets",
+  });
+  return `https://www.mapillary.com/embed?${params.toString()}`;
+}
+
 export default function StreetView() {
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const viewerRef = useRef<Viewer | null>(null);
   const [, setLocation] = useLocation();
   const [status, setStatus] = useState<Status>({ kind: "idle" });
-  const [bearing, setBearing] = useState(0);
-  const [currentCoord, setCurrentCoord] = useState<{ lat: number; lng: number } | null>(null);
+  const [panoOnly, setPanoOnly] = useState(true);
 
   const startCoord = useMemo(() => {
     const params = new URLSearchParams(window.location.search);
@@ -38,88 +50,51 @@ export default function StreetView() {
     return { lat: DEFAULT_LAT, lng: DEFAULT_LNG };
   }, []);
 
-  // Init the viewer ONCE; subsequent navigation uses viewer.moveTo().
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
+  const search = (lat: number, lng: number, forcePano = panoOnly) => {
     if (!TOKEN) {
-      setStatus({
-        kind: "error",
-        message: "VITE_MAPILLARY_TOKEN не задан",
-      });
+      setStatus({ kind: "error", message: "VITE_MAPILLARY_TOKEN не задан" });
       return;
     }
-
-    let cancelled = false;
     setStatus({ kind: "searching" });
-
-    findNearestImage(TOKEN, startCoord.lat, startCoord.lng, SEARCH_RADIUS_M)
+    findNearestImage(TOKEN, lat, lng, SEARCH_RADIUS_M, forcePano)
       .then((found) => {
-        if (cancelled) return;
+        if (!found && forcePano) {
+          // Fall back to ANY image if no panorama within range.
+          return findNearestImage(TOKEN, lat, lng, SEARCH_RADIUS_M, false);
+        }
+        return found;
+      })
+      .then((found) => {
         if (!found) {
           setStatus({ kind: "no-imagery" });
           return;
         }
-        setStatus({ kind: "loading", found });
-        const viewer = new Viewer({
-          accessToken: TOKEN,
-          container,
-          imageId: found.id,
-          component: { cover: false },
-        });
-        viewerRef.current = viewer;
-
-        viewer.on("image", (e: any) => {
-          const img = e?.image;
-          if (!img) return;
-          const lat: number | undefined = img.lngLat?.lat ?? img.computedLngLat?.lat;
-          const lng: number | undefined = img.lngLat?.lng ?? img.computedLngLat?.lng;
-          if (typeof lat === "number" && typeof lng === "number") {
-            setCurrentCoord({ lat, lng });
-          }
-          setStatus({
-            kind: "loaded",
-            imageId: img.id ?? found.id,
-            isPano: !!img.isPano,
-          });
-        });
-
-        viewer.on("bearing", (e: any) => {
-          if (typeof e?.bearing === "number") setBearing(e.bearing);
-        });
+        setStatus({ kind: "loaded", found });
       })
       .catch((err: unknown) => {
-        if (cancelled) return;
         setStatus({
           kind: "error",
           message: err instanceof Error ? err.message : String(err),
         });
       });
+  };
 
-    return () => {
-      cancelled = true;
-      try {
-        viewerRef.current?.remove();
-      } catch {
-        /* noop — WebGL context may already be gone */
-      }
-      viewerRef.current = null;
-    };
+  // Initial search on mount.
+  useEffect(() => {
+    search(startCoord.lat, startCoord.lng);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Resize on layout change.
-  useEffect(() => {
-    const onResize = () => {
-      try {
-        viewerRef.current?.resize();
-      } catch {
-        /* not ready */
-      }
-    };
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, []);
+  // Re-search when the pano-only toggle flips.
+  const togglePano = () => {
+    const next = !panoOnly;
+    setPanoOnly(next);
+    const c =
+      status.kind === "loaded"
+        ? { lat: status.found.lat, lng: status.found.lng }
+        : startCoord;
+    search(c.lat, c.lng, next);
+  };
 
   // Esc → back to map.
   useEffect(() => {
@@ -130,40 +105,22 @@ export default function StreetView() {
     return () => window.removeEventListener("keydown", onKey);
   }, [setLocation]);
 
-  const jumpTo = async (lat: number, lng: number) => {
-    if (!viewerRef.current || !TOKEN) return;
-    setStatus({ kind: "searching" });
-    try {
-      const found = await findNearestImage(TOKEN, lat, lng, SEARCH_RADIUS_M);
-      if (!found) {
-        setStatus({ kind: "no-imagery" });
-        return;
-      }
-      await viewerRef.current.moveTo(found.id);
-    } catch (err) {
-      setStatus({
-        kind: "error",
-        message: err instanceof Error ? err.message : String(err),
-      });
-    }
-  };
-
   const onUseGeolocation = () => {
     if (!navigator.geolocation) return;
     navigator.geolocation.getCurrentPosition(
-      (pos) => jumpTo(pos.coords.latitude, pos.coords.longitude),
+      (pos) => search(pos.coords.latitude, pos.coords.longitude),
       (err) => {
-        setStatus({
-          kind: "error",
-          message: `Геолокация: ${err.message}`,
-        });
+        setStatus({ kind: "error", message: `Геолокация: ${err.message}` });
       },
       { enableHighAccuracy: true, timeout: 10000 },
     );
   };
 
-  const displayCoord = currentCoord ?? startCoord;
-  const yandexUrl = `https://yandex.ru/maps/?ll=${displayCoord.lng}%2C${displayCoord.lat}&panorama%5Bpoint%5D=${displayCoord.lng}%2C${displayCoord.lat}&z=18`;
+  const display =
+    status.kind === "loaded"
+      ? { lat: status.found.lat, lng: status.found.lng }
+      : startCoord;
+  const yandexUrl = `https://yandex.ru/maps/?ll=${display.lng}%2C${display.lat}&panorama%5Bpoint%5D=${display.lng}%2C${display.lat}&z=18`;
 
   return (
     <div className="fixed inset-0 z-50 bg-black flex flex-col">
@@ -178,8 +135,34 @@ export default function StreetView() {
           <div className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
             STREET&nbsp;VIEW · MAPILLARY
           </div>
+          {status.kind === "loaded" && (
+            <div className="text-[9px] uppercase tracking-[0.18em] text-muted-foreground font-mono hidden sm:block">
+              {status.found.isPano ? "360° pano" : "perspective"} ·{" "}
+              {Math.round(status.found.distance)} м от запроса
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={togglePano}
+            className={cn(
+              "h-8 px-3 text-[10px] uppercase tracking-[0.18em] rounded-md border border-border transition-colors",
+              panoOnly
+                ? "bg-primary text-primary-foreground"
+                : "hover:bg-muted",
+            )}
+            disabled={status.kind === "searching"}
+            title="Только сферические 360° фото"
+          >
+            ◯ только 360°
+          </button>
+          <button
+            onClick={() => search(startCoord.lat, startCoord.lng)}
+            className="h-8 px-3 text-[10px] uppercase tracking-[0.18em] rounded-md border border-border hover:bg-muted transition-colors"
+            disabled={status.kind === "searching"}
+          >
+            ↻ обновить
+          </button>
           <button
             onClick={onUseGeolocation}
             className="h-8 px-3 text-[10px] uppercase tracking-[0.18em] rounded-md border border-border hover:bg-muted transition-colors"
@@ -197,8 +180,17 @@ export default function StreetView() {
         </div>
       </div>
 
-      <div className="relative flex-1">
-        <div ref={containerRef} className="absolute inset-0 bg-black" />
+      <div className="relative flex-1 bg-black">
+        {status.kind === "loaded" && (
+          <iframe
+            key={status.found.id}
+            src={buildEmbedUrl(status.found.id)}
+            title="Mapillary street view"
+            className="absolute inset-0 w-full h-full border-0"
+            allow="fullscreen; accelerometer; gyroscope"
+            allowFullScreen
+          />
+        )}
 
         {status.kind === "searching" && (
           <Overlay>
@@ -230,44 +222,10 @@ export default function StreetView() {
             <div className="text-sm uppercase tracking-[0.2em] text-red-400">
               ошибка
             </div>
-            <div className="mt-2 text-[11px] text-foreground/70 max-w-md text-center font-mono">
+            <div className="mt-2 text-[11px] text-foreground/70 max-w-md text-center font-mono break-all px-4">
               {status.message}
             </div>
           </Overlay>
-        )}
-
-        {(status.kind === "loaded" || status.kind === "loading") && (
-          <div className="absolute bottom-3 left-3 flex items-center gap-3 px-3 py-2 rounded-lg bg-background/80 border border-border backdrop-blur-sm">
-            <div
-              className="w-7 h-7 flex items-center justify-center"
-              style={{ transform: `rotate(${-bearing}deg)` }}
-              aria-hidden
-            >
-              <svg viewBox="0 0 24 24" className="w-6 h-6">
-                <path
-                  d="M12 2 L15 13 L12 11 L9 13 Z"
-                  fill="currentColor"
-                  className="text-primary"
-                />
-                <circle
-                  cx="12"
-                  cy="12"
-                  r="11"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeOpacity="0.3"
-                />
-              </svg>
-            </div>
-            <div className="flex flex-col">
-              <div className="text-[10px] uppercase tracking-[0.18em] font-mono">
-                {Math.round(((bearing % 360) + 360) % 360)}°
-              </div>
-              <div className="text-[9px] uppercase tracking-[0.14em] text-muted-foreground font-mono">
-                {displayCoord.lat.toFixed(5)}, {displayCoord.lng.toFixed(5)}
-              </div>
-            </div>
-          </div>
         )}
 
         {status.kind === "loaded" && (
@@ -285,9 +243,7 @@ export default function StreetView() {
       <div className="px-4 py-2 border-t border-border bg-background/95 text-[10px] uppercase tracking-[0.18em] text-muted-foreground flex items-center justify-between">
         <span>панорамы © Mapillary contributors · CC BY-SA</span>
         <span className="font-mono">
-          {status.kind === "loaded" && (status.isPano ? "360° pano" : "perspective")}
-          {status.kind === "loading" && "загрузка…"}
-          {status.kind === "searching" && "поиск…"}
+          {display.lat.toFixed(5)}, {display.lng.toFixed(5)}
         </span>
       </div>
     </div>

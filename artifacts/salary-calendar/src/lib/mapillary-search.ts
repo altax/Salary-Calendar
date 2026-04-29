@@ -56,6 +56,16 @@ function tileToLonLat(x: number, y: number, z: number) {
   return { lon, lat };
 }
 
+/**
+ * Score lower = better. Panoramas get a heavy bonus so a pano within
+ * ~250 m beats any perspective shot at the requested point. This is
+ * crucial for the "look around 360°" UX — perspective photos from
+ * dashcams are nearly useless in that mode.
+ */
+function score(distanceMeters: number, isPano: boolean) {
+  return isPano ? distanceMeters * 0.25 : distanceMeters;
+}
+
 async function findViaGraph(
   token: string,
   lat: number,
@@ -65,7 +75,7 @@ async function findViaGraph(
   const dLat = radiusMeters / 111320;
   const dLng = radiusMeters / (111320 * Math.cos((lat * Math.PI) / 180));
   const bbox = `${lng - dLng},${lat - dLat},${lng + dLng},${lat + dLat}`;
-  const url = `https://graph.mapillary.com/images?fields=id,computed_geometry,geometry,is_pano&bbox=${bbox}&limit=200`;
+  const url = `https://graph.mapillary.com/images?fields=id,computed_geometry,geometry,is_pano&bbox=${bbox}&limit=500`;
   const res = await fetch(url, { headers: { Authorization: `OAuth ${token}` } });
   if (!res.ok) return null;
   const json = (await res.json()) as {
@@ -78,27 +88,17 @@ async function findViaGraph(
   };
   const items = json.data ?? [];
   let best: FoundImage | null = null;
+  let bestScore = Infinity;
   for (const it of items) {
     const c = it.computed_geometry?.coordinates ?? it.geometry?.coordinates;
     if (!c) continue;
     const [ilng, ilat] = c;
     const d = metersBetween(lat, lng, ilat, ilng);
     const isPano = !!it.is_pano;
-    const score = isPano ? d - 30 : d;
-    const bestScore = best
-      ? best.isPano
-        ? best.distance - 30
-        : best.distance
-      : Infinity;
-    if (score < bestScore) {
-      best = {
-        id: it.id,
-        lat: ilat,
-        lng: ilng,
-        distance: d,
-        isPano,
-        source: "graph",
-      };
+    const s = score(d, isPano);
+    if (s < bestScore) {
+      bestScore = s;
+      best = { id: it.id, lat: ilat, lng: ilng, distance: d, isPano, source: "graph" };
     }
   }
   return best;
@@ -130,6 +130,7 @@ async function findViaTiles(
   const tiles = await Promise.all(reqs);
 
   let best: FoundImage | null = null;
+  let bestScore = Infinity;
   for (const t of tiles) {
     if (!t.buf) continue;
     let vt: VectorTile;
@@ -159,14 +160,82 @@ async function findViaTiles(
       const id = String(props.id ?? "");
       if (!id) continue;
       const isPano = !!props.is_pano;
-      const score = isPano ? d - 30 : d;
-      const bestScore = best
-        ? best.isPano
-          ? best.distance - 30
-          : best.distance
-        : Infinity;
-      if (score < bestScore) {
+      const s = score(d, isPano);
+      if (s < bestScore) {
+        bestScore = s;
         best = { id, lat: ilat, lng: ilng, distance: d, isPano, source: "tiles" };
+      }
+    }
+  }
+  return best;
+}
+
+/**
+ * Variant of findViaTiles that ONLY considers panoramic (is_pano = true)
+ * imagery. Used when the user explicitly forces 360°-only mode.
+ */
+async function findPanoViaTiles(
+  token: string,
+  lat: number,
+  lng: number,
+  searchTilesRadius = 2,
+): Promise<FoundImage | null> {
+  const Z = 14;
+  const { x: cx, y: cy } = lonLatToTile(lng, lat, Z);
+  const reqs: Promise<{ tx: number; ty: number; buf: ArrayBuffer | null }>[] = [];
+  for (let dx = -searchTilesRadius; dx <= searchTilesRadius; dx++) {
+    for (let dy = -searchTilesRadius; dy <= searchTilesRadius; dy++) {
+      const tx = cx + dx;
+      const ty = cy + dy;
+      const url = `https://tiles.mapillary.com/maps/vtp/mly1_public/2/${Z}/${tx}/${ty}?access_token=${encodeURIComponent(token)}`;
+      reqs.push(
+        fetch(url).then(async (r) =>
+          r.ok ? { tx, ty, buf: await r.arrayBuffer() } : { tx, ty, buf: null },
+        ),
+      );
+    }
+  }
+  const tiles = await Promise.all(reqs);
+
+  let best: FoundImage | null = null;
+  let bestDistance = Infinity;
+  for (const t of tiles) {
+    if (!t.buf) continue;
+    let vt: VectorTile;
+    try {
+      vt = new VectorTile(new Pbf(t.buf));
+    } catch {
+      continue;
+    }
+    const layer = vt.layers["image"];
+    if (!layer) continue;
+    const nw = tileToLonLat(t.tx, t.ty, Z);
+    const se = tileToLonLat(t.tx + 1, t.ty + 1, Z);
+    for (let i = 0; i < layer.length; i++) {
+      const f = layer.feature(i);
+      const props = f.properties as Record<string, unknown>;
+      if (!props.is_pano) continue;
+      let pt: { x: number; y: number } | undefined;
+      try {
+        const geom = f.loadGeometry();
+        pt = geom[0]?.[0];
+      } catch {
+        continue;
+      }
+      if (!pt) continue;
+      const ilng = nw.lon + (se.lon - nw.lon) * (pt.x / layer.extent);
+      const ilat = nw.lat + (se.lat - nw.lat) * (pt.y / layer.extent);
+      const d = metersBetween(lat, lng, ilat, ilng);
+      if (d < bestDistance) {
+        bestDistance = d;
+        best = {
+          id: String(props.id ?? ""),
+          lat: ilat,
+          lng: ilng,
+          distance: d,
+          isPano: true,
+          source: "tiles",
+        };
       }
     }
   }
@@ -178,10 +247,12 @@ export async function findNearestImage(
   lat: number,
   lng: number,
   radiusMeters = 800,
+  panoOnly = false,
 ): Promise<FoundImage | null> {
   if (!token) throw new Error("VITE_MAPILLARY_TOKEN не задан");
-  // Graph API first — if it works it gives us slightly more metadata,
-  // and any wider area is a single HTTP call instead of 9 tile fetches.
+  if (panoOnly) {
+    return findPanoViaTiles(token, lat, lng);
+  }
   try {
     const viaGraph = await findViaGraph(token, lat, lng, radiusMeters);
     if (viaGraph) return viaGraph;
