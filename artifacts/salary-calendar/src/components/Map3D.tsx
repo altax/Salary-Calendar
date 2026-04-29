@@ -1208,9 +1208,13 @@ export default function Map3D({
         // blank. We keep the vanilla OpenFreeMap "liberty" colors for now and
         // only add 3D building extrusions on top.
         // applyDarkTheme(map, themeRef.current);
-        // Real elevation under the satellite photo. Done BEFORE buildings so
-        // the extrusion bases sit on terrain height instead of sea level.
-        applyTerrain(map);
+        // NOTE: 3D terrain (applyTerrain) is intentionally NOT enabled.
+        // The Terrarium DEM at low zoom (maxzoom 14) interpolates into
+        // huge ocean-like swells in flat regions — exactly the case
+        // for SPb / Kingisepp — which warps the satellite photograph
+        // and the building bases into a melted mess. The helper stays
+        // in the file for future hilly-region use, but it's a net
+        // negative everywhere our courier actually drives.
         // Volumetric green areas (woods/parks/grass) — gives parks
         // thickness so they read as real outdoor space.
         addGreenVolumes(map, themeRef.current);
