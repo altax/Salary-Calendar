@@ -366,6 +366,14 @@ export default function Map3D({
     if (!containerRef.current) return;
     let cancelled = false;
 
+    // Browsers cap simultaneous fetches per origin at ~6; bumping MapLibre's
+    // global limit lets it pipeline more tile requests so the visible
+    // viewport fills in noticeably faster on first load. This is a global
+    // setter (not a per-map MapOptions field) in maplibre-gl 5.x.
+    try {
+      (maplibregl as any).setMaxParallelImageRequests?.(32);
+    } catch {}
+
     console.log("[Map3D] init start");
     setLoading(true);
 
@@ -394,10 +402,6 @@ export default function Map3D({
         // plays when a new tile arrives — on slow networks the screen can
         // sit half-blank for almost a second per tile, which feels broken.
         fadeDuration: 0,
-        // Browsers cap simultaneous fetches per origin at ~6; bumping this
-        // lets MapLibre pipeline more requests so the visible viewport
-        // fills in noticeably faster on first load.
-        maxParallelImageRequests: 32,
         // Tiles served by our proxy already have long cache headers, and
         // re-requesting expired ones every few minutes just stalls the
         // network for no visual gain.

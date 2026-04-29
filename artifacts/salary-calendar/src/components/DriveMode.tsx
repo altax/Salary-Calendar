@@ -3,6 +3,7 @@ import L from "leaflet";
 import { useGeolocation, type GeoPosition } from "@/lib/geolocation";
 import { type PendingOrder } from "@/lib/deliveries";
 import type { Depot, ResolvedJob } from "@/lib/store";
+import Map3D from "@/components/Map3D";
 import DeliveryMap, {
   type ManeuverMarker,
   type RouteLegSegment,
@@ -1091,44 +1092,85 @@ export default function DriveMode({
 
       {/* Map */}
       <div className="flex-1 min-h-0 relative">
-        <DeliveryMap
-          deliveries={[]}
-          pending={pending}
-          jobs={jobs}
-          depot={depot}
-          showDepot={mode === "returning" || mode === "finished" || pending.length === 0}
-          theme={theme}
-          userPosition={position}
-          followUser={!!position}
-          activePendingId={active?.id ?? null}
-          showRoute={false}
-          showPendingRoute={false}
-          fitToAll={!position && fitPoints.length > 1}
-          initialZoom={position ? 16 : 12}
-          routeLegs={routeLegs}
-          maneuvers={maneuvers}
-          showRouteOverlay={routeVisible}
-          autoZoomBack={!!position}
-          onMapReady={(m) => { mapRef.current = m; }}
-          layerMode={layerMode}
-          bearing={
-            courseUp && (mode === "driving" || mode === "returning")
-              ? smoothedHeading
-              : null
-          }
-        />
+        {layerMode === "3d" ? (
+          // 3D POV mode: MapLibre with the chase camera enabled while we
+          // have a GPS fix (high pitch + course-up bearing), the active
+          // stop fed in as `selectedId` so its building extrudes in
+          // bright orange, and the current route shown as the "pending"
+          // line. We don't pass `onMapReady` here because zoom buttons
+          // below already early-return for 3D.
+          <Map3D
+            deliveries={[]}
+            pending={pending}
+            jobs={jobs}
+            theme={theme}
+            depot={depot}
+            userPosition={position}
+            followUser={!!position}
+            selectedId={active?.id ?? null}
+            showRoute={false}
+            showPendingRoute={true}
+            pendingRouteGeometry={route.route?.geometry ?? null}
+          />
+        ) : (
+          <DeliveryMap
+            deliveries={[]}
+            pending={pending}
+            jobs={jobs}
+            depot={depot}
+            showDepot={mode === "returning" || mode === "finished" || pending.length === 0}
+            theme={theme}
+            userPosition={position}
+            followUser={!!position}
+            activePendingId={active?.id ?? null}
+            showRoute={false}
+            showPendingRoute={false}
+            fitToAll={!position && fitPoints.length > 1}
+            initialZoom={position ? 16 : 12}
+            routeLegs={routeLegs}
+            maneuvers={maneuvers}
+            showRouteOverlay={routeVisible}
+            autoZoomBack={!!position}
+            onMapReady={(m) => { mapRef.current = m; }}
+            layerMode={layerMode}
+            bearing={
+              courseUp && (mode === "driving" || mode === "returning")
+                ? smoothedHeading
+                : null
+            }
+          />
+        )}
         {/* Zoom + layer buttons */}
         <div className="absolute bottom-16 left-3 z-[1200] flex flex-col gap-1.5 pointer-events-auto">
           {onLayerChange && (
             <button
               onClick={() => {
-                const next: MapLayerMode = layerMode === "default" ? "detail" : layerMode === "detail" ? "satellite" : "default";
+                const order: MapLayerMode[] = ["default", "detail", "satellite", "3d"];
+                const idx = order.indexOf(layerMode);
+                const next = order[(idx + 1) % order.length];
                 onLayerChange(next);
               }}
-              className="w-9 h-9 rounded-md border border-border bg-card/95 backdrop-blur text-[14px] flex items-center justify-center shadow-md hover:bg-muted transition-colors"
-              title={layerMode === "default" ? "Стиль: карта" : layerMode === "detail" ? "Стиль: детальная OSM" : "Стиль: спутник"}
+              className={cn(
+                "w-9 h-9 rounded-md border border-border bg-card/95 backdrop-blur text-[14px] flex items-center justify-center shadow-md hover:bg-muted transition-colors font-bold",
+                layerMode === "3d" && "bg-blue-600 text-white border-blue-600",
+              )}
+              title={
+                layerMode === "default"
+                  ? "Стиль: карта"
+                  : layerMode === "detail"
+                    ? "Стиль: детальная OSM"
+                    : layerMode === "satellite"
+                      ? "Стиль: спутник"
+                      : "Стиль: 3D POV"
+              }
             >
-              {layerMode === "default" ? "🗺" : layerMode === "detail" ? "🏙" : "🛰"}
+              {layerMode === "default"
+                ? "🗺"
+                : layerMode === "detail"
+                  ? "🏙"
+                  : layerMode === "satellite"
+                    ? "🛰"
+                    : "3D"}
             </button>
           )}
           <button
