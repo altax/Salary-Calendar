@@ -11,12 +11,13 @@ import type { GeoPosition } from "@/lib/geolocation";
 
 const SPB_CENTER: [number, number] = [30.3351, 59.9343];
 
-// Tiles, fonts, sprites and the style JSON are routed through our own server
-// (Vite dev proxy / production proxy) because the upstream Cloudflare host
-// `tiles.openfreemap.org` is intermittently unreachable in some networks (RU).
-// The browser hits the same origin it loaded the app from — no VPN required.
+// Both tile sources are proxied through our own server (Vite dev proxy /
+// production proxy) because the upstream Cloudflare host
+// `tiles.openfreemap.org` is intermittently unreachable in some networks (RU)
+// and we want a single, predictable origin for caching.
 const OPENFREEMAP_PROXY_PREFIX = "/_tiles/openfreemap";
 const OPENFREEMAP_UPSTREAM = "https://tiles.openfreemap.org";
+const OSM_PROXY_PREFIX = "/_tiles/osm";
 
 function proxyOrigin(): string {
   if (typeof window !== "undefined" && window.location?.origin) {
@@ -24,11 +25,6 @@ function proxyOrigin(): string {
   }
   return "";
 }
-
-// `positron` is a simpler, well-tested OpenFreeMap style; "liberty" had
-// expression evaluation issues with recent tile versions that left the map
-// blank. Switch back to liberty later if positron proves stable.
-const OPENFREEMAP_STYLE_URL = `${proxyOrigin()}${OPENFREEMAP_PROXY_PREFIX}/styles/positron`;
 
 function rewriteOpenFreeMapUrl(url: string): string {
   // MapLibre loads tiles inside a Web Worker which cannot resolve relative
@@ -40,6 +36,69 @@ function rewriteOpenFreeMapUrl(url: string): string {
     return proxyOrigin() + url;
   }
   return url;
+}
+
+// Build a self-contained inline style backed by OSM raster tiles served
+// through our same-origin proxy. We use a small inline style instead of
+// loading a vector style JSON because the OpenFreeMap "liberty" and
+// "positron" styles both fail expression evaluation on recent tile
+// versions ("Expected value to be of type number, but found null"), which
+// silently leaves the entire canvas blank. Raster tiles are immune to that
+// class of issue: they're just PNGs with no per-feature expressions.
+function buildBaseStyle(theme: "dark" | "light"): maplibregl.StyleSpecification {
+  const origin = proxyOrigin();
+  const subs = ["a", "b", "c"];
+  const tiles = subs.map((s) => `${origin}${OSM_PROXY_PREFIX}/${s}/{z}/{x}/{y}.png`);
+  const background = theme === "dark" ? "#0a0d12" : "#f3f4f7";
+  return {
+    version: 8,
+    glyphs: `${origin}${OPENFREEMAP_PROXY_PREFIX}/fonts/{fontstack}/{range}.pbf`,
+    sources: {
+      osm: {
+        type: "raster",
+        tiles,
+        tileSize: 256,
+        attribution:
+          '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>',
+        maxzoom: 19,
+      },
+    },
+    layers: [
+      {
+        id: "background",
+        type: "background",
+        paint: { "background-color": background },
+      },
+      {
+        id: "osm-tiles",
+        type: "raster",
+        source: "osm",
+        minzoom: 0,
+        maxzoom: 22,
+        // In dark mode we tone the bright OSM raster down so it matches the
+        // app's dark theme without losing legibility on the e-bike tablet.
+        paint:
+          theme === "dark"
+            ? { "raster-brightness-min": 0.0, "raster-brightness-max": 0.55, "raster-saturation": -0.35, "raster-contrast": 0.1 }
+            : {},
+      },
+    ],
+  };
+}
+
+// Add the OpenFreeMap vector source on top of the raster basemap purely so
+// we can render 3D building extrusions. We do NOT load any of OpenFreeMap's
+// vector layers (which is what was crashing) — just the building polygons.
+function addOpenMapTilesVectorSource(map: MLMap) {
+  if (map.getSource("openmaptiles")) return;
+  try {
+    map.addSource("openmaptiles", {
+      type: "vector",
+      url: `${proxyOrigin()}${OPENFREEMAP_PROXY_PREFIX}/planet`,
+    } as any);
+  } catch (err) {
+    console.warn("[Map3D] failed to add openmaptiles source", err);
+  }
 }
 
 function jobColor(job: ResolvedJob | undefined, theme: "dark" | "light"): string {
@@ -122,36 +181,14 @@ function add3DBuildings(map: MLMap, theme: "dark" | "light") {
   const buildingTop = isDark ? "#272b33" : "#cdd1d8";
   const buildingTall = isDark ? "#3a3f48" : "#b9bdc4";
 
-  const style = map.getStyle();
-  // Find the source-layer name used by the existing buildings layer (some styles call it "building", some other names)
-  let sourceLayer: string | null = null;
-  let source: string | null = null;
-  for (const l of (style?.layers ?? []) as any[]) {
-    if (l["source-layer"] === "building" && l.source) {
-      sourceLayer = "building";
-      source = l.source;
-      break;
-    }
-  }
-  if (!source) {
-    if (map.getSource("openmaptiles")) {
-      source = "openmaptiles";
-      sourceLayer = "building";
-    }
-  }
-  if (!source || !sourceLayer) {
-    console.warn("[Map3D] no building source-layer found in style; skipping 3D extrusion");
-    return;
-  }
+  // Make sure the OpenMapTiles vector source is loaded — only used for 3D
+  // building geometry on top of the OSM raster basemap.
+  addOpenMapTilesVectorSource(map);
+  const source = "openmaptiles";
+  const sourceLayer = "building";
 
-  // Find the first symbol (label) layer so extrusions sit beneath labels
-  let beforeId: string | undefined;
-  for (const l of (style?.layers ?? []) as any[]) {
-    if (l.type === "symbol") {
-      beforeId = l.id;
-      break;
-    }
-  }
+  // No symbol layers in our inline style, so just append at the end.
+  const beforeId: string | undefined = undefined;
 
   // Defensive height expression: openmaptiles building features may have
   // null `render_height` / `height` properties. Both `coalesce` and
@@ -304,7 +341,7 @@ export default function Map3D({
     try {
       map = new maplibregl.Map({
         container: containerRef.current,
-        style: OPENFREEMAP_STYLE_URL,
+        style: buildBaseStyle(themeRef.current),
         center: depot ? [depot.lng, depot.lat] : SPB_CENTER,
         zoom: initialZoom,
         pitch: 60,
@@ -312,10 +349,11 @@ export default function Map3D({
         canvasContextAttributes: { antialias: true },
         attributionControl: { compact: true },
         maxPitch: 75,
-        // The style JSON returned by the proxy still contains absolute
-        // upstream URLs for tiles/fonts/sprites — rewrite each one to go
-        // through our same-origin proxy so it works on networks that block
-        // the upstream Cloudflare host.
+        // Any URL that points at the OpenFreeMap upstream (e.g. the
+        // openmaptiles vector source we add later for 3D buildings, or
+        // glyph URLs in the inline style) must be routed through our
+        // same-origin proxy so it works on networks that block the
+        // upstream Cloudflare host.
         transformRequest: (url) => ({ url: rewriteOpenFreeMapUrl(url) }),
       });
     } catch (err) {

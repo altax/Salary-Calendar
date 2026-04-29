@@ -50,6 +50,69 @@ function openFreeMapProxyPlugin(): Plugin {
   };
 }
 
+// Proxy raster OSM tiles via several mirrors. Used as the primary basemap
+// because it's the most reliable global source — vector styles (OpenFreeMap
+// liberty / positron) have been tripping over expression evaluation errors on
+// recent tile versions, leaving the canvas blank. Raster tiles can never
+// have that class of problem: they're just PNGs.
+//
+// The path scheme is `/_tiles/osm/{mirror}/{z}/{x}/{y}.png` where {mirror} is
+// one of: `a`, `b`, `c` (the standard OSM tile.openstreetmap.org sub-domains).
+// We round-robin between them on the client to spread load and stay within
+// OSM's tile usage policy.
+function osmTileProxyPlugin(): Plugin {
+  const PREFIX = "/_tiles/osm";
+  const MIRRORS: Record<string, string> = {
+    a: "https://a.tile.openstreetmap.org",
+    b: "https://b.tile.openstreetmap.org",
+    c: "https://c.tile.openstreetmap.org",
+  };
+
+  const middleware: Connect.NextHandleFunction = async (req, res, next) => {
+    if (!req.url || !req.url.startsWith(PREFIX)) return next();
+    const rest = req.url.slice(PREFIX.length); // /a/14/9574/4769.png
+    const match = rest.match(/^\/([abc])(\/.+)$/);
+    if (!match) return next();
+    const upstreamUrl = MIRRORS[match[1]] + match[2];
+    try {
+      const upstreamRes = await fetch(upstreamUrl, {
+        headers: {
+          // OSM Tile Usage Policy requires a meaningful, identifying UA so
+          // operators can contact us if there's a problem.
+          "user-agent":
+            "spb-courier-navigator/1.0 (self-hosted; contact via app)",
+          "accept-encoding": "identity",
+        },
+      });
+      res.statusCode = upstreamRes.status;
+      const ct = upstreamRes.headers.get("content-type");
+      if (ct) res.setHeader("content-type", ct);
+      // Tiles change rarely; cache aggressively so the courier can re-use
+      // them between sessions / when bouncing between stairwells.
+      res.setHeader("cache-control", "public, max-age=604800, immutable");
+      res.setHeader("access-control-allow-origin", "*");
+      const buf = Buffer.from(await upstreamRes.arrayBuffer());
+      res.end(buf);
+    } catch (err) {
+      res.statusCode = 502;
+      res.setHeader("content-type", "text/plain");
+      res.end(
+        `OSM proxy error: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  };
+
+  return {
+    name: "osm-tile-proxy",
+    configureServer(server) {
+      server.middlewares.use(middleware);
+    },
+    configurePreviewServer(server) {
+      server.middlewares.use(middleware);
+    },
+  };
+}
+
 const rawPort = process.env.PORT;
 
 if (!rawPort) {
@@ -79,6 +142,7 @@ export default defineConfig({
     tailwindcss(),
     runtimeErrorOverlay(),
     openFreeMapProxyPlugin(),
+    osmTileProxyPlugin(),
     ...(process.env.NODE_ENV !== "production" &&
     process.env.REPL_ID !== undefined
       ? [

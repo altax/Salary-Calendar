@@ -1,0 +1,38 @@
+[Map3D] init start
+Map3D.tsx:344 [Map3D] tile loading openmaptiles Wp
+Map3D.tsx:344 [Map3D] tile loading openmaptiles Wp
+Map3D.tsx:344 [Map3D] tile loading openmaptiles Wp
+Map3D.tsx:344 [Map3D] tile loading openmaptiles Wp
+Map3D.tsx:344 [Map3D] tile loading openmaptiles Wp
+Map3D.tsx:344 [Map3D] tile loading openmaptiles Wp
+Map3D.tsx:344 [Map3D] tile loading openmaptiles Wp
+Map3D.tsx:344 [Map3D] tile loading openmaptiles Wp
+Map3D.tsx:344 [Map3D] tile loading openmaptiles Wp
+Map3D.tsx:344 [Map3D] tile loading openmaptiles Wp
+Map3D.tsx:344 [Map3D] tile loading openmaptiles Wpkey: "1aikbsee"x: 9576y: 4768z: 14[[Prototype]]: Object
+3558296dd-94f1-4e78-95f7-7af04415f1f3:2786 Expected value to be of type number, but found null instead.
+evaluate @ 558296dd-94f1-4e78-95f7-7af04415f1f3:2786
+Map3D.tsx:382 [Map3D] map loaded — forcing resize
+Map3D.tsx:344 [Map3D] tile loading pending-route Wp {z: 14, x: 9574, y: 4769, key: '1aiwyuee'}
+Map3D.tsx:344 [Map3D] tile loading pending-route Wp {z: 14, x: 9574, y: 4770, key: '1aj9lyee'}
+Map3D.tsx:344 [Map3D] tile loading pending-route Wp {z: 14, x: 9575, y: 4769, key: '1aiwyvee'}
+Map3D.tsx:344 [Map3D] tile loading pending-route Wp {z: 14, x: 9573, y: 4769, key: '1aiwytee'}
+Map3D.tsx:344 [Map3D] tile loading pending-route Wp {z: 14, x: 9574, y: 4768, key: '1aikbqee'}
+Map3D.tsx:344 [Map3D] tile loading pending-route Wp {z: 14, x: 9575, y: 4768, key: '1aikbree'}
+Map3D.tsx:344 [Map3D] tile loading pending-route Wp {z: 14, x: 9573, y: 4768, key: '1aikbpee'}
+Map3D.tsx:344 [Map3D] tile loading active-route Wp {z: 14, x: 9574, y: 4769, key: '1aiwyuee'}
+Map3D.tsx:344 [Map3D] tile loading active-route Wp {z: 14, x: 9574, y: 4770, key: '1aj9lyee'}
+Map3D.tsx:344 [Map3D] tile loading active-route Wp {z: 14, x: 9575, y: 4769, key: '1aiwyvee'}
+Map3D.tsx:344 [Map3D] tile loading active-route Wp {z: 14, x: 9573, y: 4769, key: '1aiwytee'}
+Map3D.tsx:344 [Map3D] tile loading active-route Wp {z: 14, x: 9574, y: 4768, key: '1aikbqee'}
+Map3D.tsx:344 [Map3D] tile loading active-route Wp {z: 14, x: 9575, y: 4768, key: '1aikbree'}
+Map3D.tsx:344 [Map3D] tile loading active-route Wp {z: 14, x: 9573, y: 4768, key: '1aikbpee'}
+Map3D.tsx:344 [Map3D] tile loading traveled-route Wp {z: 14, x: 9574, y: 4769, key: '1aiwyuee'}
+Map3D.tsx:344 [Map3D] tile loading traveled-route Wp {z: 14, x: 9574, y: 4770, key: '1aj9lyee'}
+Map3D.tsx:344 [Map3D] tile loading traveled-route Wp {z: 14, x: 9575, y: 4769, key: '1aiwyvee'}
+Map3D.tsx:344 [Map3D] tile loading traveled-route Wp {z: 14, x: 9573, y: 4769, key: '1aiwytee'}
+Map3D.tsx:344 [Map3D] tile loading traveled-route Wp {z: 14, x: 9574, y: 4768, key: '1aikbqee'}
+Map3D.tsx:344 [Map3D] tile loading traveled-route Wp {z: 14, x: 9575, y: 4768, key: '1aikbree'}
+Map3D.tsx:344 [Map3D] tile loading traveled-route Wp {z: 14, x: 9573, y: 4768, key: '1aikbpee'}
+open.er-api.com/v6/latest/USD:1  Failed to load resource: net::ERR_CONNECTION_RESET
+Map3D.tsx:355 [Map3D] idle — canvas: 425 x 300 css: 425 x 300 tiles ok: 5 fail: 0 center: $p {lng: 30.3794, lat: 59.8669} zoom: 14
