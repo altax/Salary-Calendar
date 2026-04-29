@@ -107,22 +107,13 @@ function jobColor(job: ResolvedJob | undefined, theme: "dark" | "light"): string
   return theme === "dark" ? "#888" : "#666";
 }
 
-function detectWebGL(): { ok: boolean; reason?: string } {
-  try {
-    const probe = document.createElement("canvas");
-    const gl =
-      (probe.getContext("webgl2") as WebGL2RenderingContext | null) ||
-      (probe.getContext("webgl") as WebGLRenderingContext | null) ||
-      (probe.getContext("experimental-webgl") as WebGLRenderingContext | null);
-    if (!gl) return { ok: false, reason: "Контекст WebGL не создан." };
-    return { ok: true };
-  } catch (e) {
-    return {
-      ok: false,
-      reason: e instanceof Error ? e.message : "Неизвестная ошибка WebGL.",
-    };
-  }
-}
+// We deliberately do NOT pre-probe WebGL via `document.createElement("canvas")`
+// — that probe returns `null` in several real-world Chromium contexts where
+// MapLibre's own canvas would actually render fine (Replit's embedded preview
+// iframe, some Android tablets, headless screenshot environments, certain
+// GPU-blacklist configurations). Instead we let MapLibre attempt to initialise
+// the canvas itself; if it genuinely cannot get a WebGL context it throws
+// during construction and we fall back gracefully via the try/catch below.
 
 function applyDarkTheme(map: MLMap, theme: "dark" | "light") {
   const isDark = theme === "dark";
@@ -327,16 +318,6 @@ export default function Map3D({
     console.log("[Map3D] init start");
     setLoading(true);
 
-    const webgl = detectWebGL();
-    if (!webgl.ok) {
-      console.warn("[Map3D] webgl unavailable:", webgl.reason);
-      setInitError(
-        `Этому браузеру недоступен WebGL (${webgl.reason ?? ""}). 3D-карта не запустится. Вернись в обычный режим кнопкой 3D слева.`,
-      );
-      setLoading(false);
-      return;
-    }
-
     let map: MLMap;
     try {
       map = new maplibregl.Map({
@@ -346,7 +327,15 @@ export default function Map3D({
         zoom: initialZoom,
         pitch: 60,
         bearing: -17,
-        canvasContextAttributes: { antialias: true },
+        // `failIfMajorPerformanceCaveat: false` lets MapLibre fall back to
+        // software-rendered WebGL (SwiftShader / llvmpipe) when no GPU is
+        // available — without this, embedded preview iframes and low-end
+        // tablets refuse to create a context and the user just sees the
+        // "WebGL unavailable" fallback even though rendering would work.
+        canvasContextAttributes: {
+          antialias: true,
+          failIfMajorPerformanceCaveat: false,
+        },
         attributionControl: { compact: true },
         maxPitch: 75,
         // Any URL that points at the OpenFreeMap upstream (e.g. the
@@ -358,10 +347,15 @@ export default function Map3D({
       });
     } catch (err) {
       console.error("[Map3D] map ctor failed", err);
+      const raw = err instanceof Error ? err.message : String(err);
+      // MapLibre serialises a WebGL context-creation failure as a JSON blob
+      // (with `type:"webglcontextcreationerror"`); detect it and show a short
+      // human-readable message instead of dumping the JSON into the UI.
+      const isWebGLFailure = /webgl/i.test(raw);
       setInitError(
-        err instanceof Error
-          ? `Не удалось создать 3D-карту: ${err.message}`
-          : "Не удалось создать 3D-карту.",
+        isWebGLFailure
+          ? "У этого браузера не получилось создать WebGL-контекст для 3D-карты. Это часто бывает во встроенном предпросмотре Replit или на старом GPU. Открой ссылку в обычной вкладке Chrome / Firefox, либо переключись в обычный режим кнопкой 3D слева."
+          : `Не удалось создать 3D-карту: ${raw}. Переключись в обычный режим кнопкой 3D слева.`,
       );
       setLoading(false);
       return;
