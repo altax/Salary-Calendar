@@ -1107,10 +1107,14 @@ function add3DBuildings(map: MLMap, theme: "dark" | "light") {
   // Real Google-3D buildings have textured beige-grey facades; we
   // approximate with desaturated cream → warm grey → cool grey, all
   // close in luminance to the average satellite ground tone.
-  const buildingColor = isDark ? "#2a2620" : "#e6dcc9"; // low / warm cream
-  const buildingMid = isDark ? "#2a2c30" : "#cfc6b8"; // mid / soft beige-grey
-  const buildingTop = isDark ? "#2e3438" : "#b9b3aa"; // tall / cool grey
-  const buildingTall = isDark ? "#384048" : "#a39f97"; // tower / dark grey
+  // Lifted dark-theme palette: at a few % brighter the buildings read
+  // as light-grey solid models lit from above (which is what they should
+  // look like on a satellite navigator), instead of burnt smudges that
+  // blend into the satellite shadows.
+  const buildingColor = isDark ? "#5a5852" : "#e6dcc9"; // low / warm grey
+  const buildingMid = isDark ? "#65676d" : "#cfc6b8"; // mid / cool grey
+  const buildingTop = isDark ? "#71757d" : "#b9b3aa"; // tall / lighter grey
+  const buildingTall = isDark ? "#7c828c" : "#a39f97"; // tower / palest grey
 
   // Make sure the OpenMapTiles vector source is loaded — only used for 3D
   // building geometry on top of the OSM raster basemap.
@@ -1170,13 +1174,17 @@ function add3DBuildings(map: MLMap, theme: "dark" | "light") {
         ],
         "fill-extrusion-height": heightExpr,
         "fill-extrusion-base": baseExpr,
-        "fill-extrusion-opacity": 0.94,
-        "fill-extrusion-vertical-gradient": true,
+        "fill-extrusion-opacity": 0.92,
+        // Vertical gradient was making buildings look like they were melting
+        // into the satellite imagery (darker near the ground, lighter at
+        // top — on satellite that reads as a smudged shadow, not a solid
+        // structure). Solid color + SunLight directional shading gives
+        // them the volume of a real model without the "drip" artefact.
+        "fill-extrusion-vertical-gradient": false,
         // NOTE: `fill-extrusion-ambient-occlusion-*` exists in Mapbox GL JS
-        // but is NOT a MapLibre paint property — adding it spams the console
-        // with "unknown property" errors and the AO never renders anyway.
-        // Building grounding instead comes from the deck.gl SunLight pass
-        // and `fill-extrusion-vertical-gradient` above.
+        // but is NOT a MapLibre paint property — adding it spams the
+        // console with "unknown property" errors and the AO never
+        // renders anyway. Building grounding comes from SunLight only.
       },
     } as any,
     beforeId,
@@ -1534,31 +1542,34 @@ export default function Map3D({
         // elevated. Drives `setTerrain` AND the contour-line vector source
         // below from one shared DEM tile fetch (maplibre-contour).
         applyTerrain(map);
-        // Topographic contour lines: the cheapest "this place has hills"
-        // cue, drawn very thin and low-opacity so they don't compete
-        // with the route or buildings.
-        addContourLines(map, themeRef.current);
         // Deep-blue water polygons (Neva / Финский залив). Drawn early
         // so the road overlay & buildings sit on top of it.
         addWaterDepth(map, themeRef.current);
-        // Volumetric green areas (woods/parks/grass) — gives parks
-        // thickness so they read as real outdoor space.
-        addGreenVolumes(map, themeRef.current);
         // Crisp vector road overlay over the satellite photo so the
         // network is legible at a glance even where the photograph is
         // shadowed or noisy.
         addRoadOverlay(map, themeRef.current);
-        // Building cast shadows MUST be added before `add3DBuildings`
-        // so they sit BELOW the extrusion in z-order. The footprint
-        // under the building gets covered by the extrusion, leaving
-        // only the part that "extends past the wall" visible — exactly
-        // like a real shadow on the asphalt.
-        addBuildingShadows(map, themeRef.current);
+        // 3D buildings — the single layer that makes the difference between
+        // "satellite photo" and "I'm flying through a city". Painted in a
+        // solid warm tone (no vertical gradient — gradient on satellite
+        // looks like the buildings are melting into the ground).
         add3DBuildings(map, themeRef.current);
-        // Parking mask is no longer needed against satellite imagery
-        // (real parking lots already look like real asphalt), but keep
-        // the helper for the dimmed OSM fallback layer underneath.
-        addParkingMask(map, themeRef.current);
+        // NOTE intentionally NOT loaded on satellite anymore:
+        //   - addGreenVolumes (extruded grass/wood slabs): satellite already
+        //     photographs trees & grass from above, so adding flat 4-8 m
+        //     green prisms on top creates dark muddy blobs across every
+        //     park / courtyard.
+        //   - tree scatter (deck.gl ColumnLayers): same reason — duplicates
+        //     real photographed trees with stylised brown columns and
+        //     turns courtyards into a blob carpet at navigator pitch.
+        //   - addBuildingShadows: combined with vertical-gradient on the
+        //     extrusion this produced the "melting shadow" look the user
+        //     called out. Real cast shadows now come from SunLight only.
+        //   - addContourLines: visual noise at navigator zoom, especially
+        //     in flat СПб where contour density doesn't add information.
+        //   - addParkingMask: only useful against the dimmed OSM fallback;
+        //     on real satellite imagery parking lots already look like
+        //     parking lots.
         // Atmosphere: hazy horizon + ground-fog blend at distance, makes
         // the pitched 3D camera feel like depth instead of a flat diorama.
         applyAtmosphere(map, themeRef.current);
@@ -2086,186 +2097,17 @@ export default function Map3D({
     pushDeckLayers();
   }, [activeRouteGeometry, showRoute, pushDeckLayers]);
 
-  // 3D trees scattered inside park / wood / grass polygons. Each tree is
-  // a thin tall hexagonal column for the trunk + a wider lower-poly
-  // canopy column on top, both rendered via `ColumnLayer`. The trees
-  // pick up the same `LightingEffect` as the route ribbon, so highlight
-  // direction matches the buildings' setLight — the courier's brain
-  // reads the courtyard as one coherent 3D space, not "buildings + a
-  // sticker of green dots".
-  //
-  // We re-scatter on `moveend` (debounced) because we can only see which
-  // green polygons exist after MapLibre has rasterised the tile around
-  // the viewport. Cap the number of trees so the GPU stays comfortable
-  // even on phones.
+  // 3D scattered trees were tried as a "courtyard depth" cue but failed
+  // visually on satellite imagery: the photo already contains real trees
+  // (correctly shaded, correctly placed), so adding deck.gl ColumnLayer
+  // trunks + canopies on top duplicates them as muddy brown/dark-green
+  // blobs that turn every park & courtyard into a blob carpet at
+  // navigator pitch. Disabled. Effect now only ensures the slot is
+  // clear so any previous layers are removed.
   useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !isLoadedRef.current) return;
-
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    let cancelled = false;
-
-    const TREE_LAYERS = ["green-volume-wood", "green-volume-grass"] as const;
-    const MAX_TREES = 800;
-    // Roughly one tree per 90 m² of green polygon — dense enough that a
-    // small courtyard reads as a planted area, sparse enough that a big
-    // forest doesn't blow the budget on the first polygon it sees.
-    const DENSITY_TREES_PER_M2 = 1 / 90;
-
-    const scatter = () => {
-      if (cancelled) return;
-      const z = map.getZoom();
-      // Below z 15 the columns are too small to read and just look like
-      // pixel noise. Above 21 they fight with the satellite trees that
-      // are already in the photograph at that scale.
-      if (z < 15 || z > 21) {
-        deckLayersRef.current.trees = undefined;
-        deckLayersRef.current.treeTrunks = undefined;
-        pushDeckLayers();
-        return;
-      }
-      let features: any[] = [];
-      for (const layerId of TREE_LAYERS) {
-        if (!map.getLayer(layerId)) continue;
-        try {
-          const f = map.queryRenderedFeatures(undefined, { layers: [layerId] });
-          features = features.concat(f);
-        } catch {
-          // Tile not yet ready — skip silently, next moveend will retry.
-        }
-      }
-      if (features.length === 0) {
-        deckLayersRef.current.trees = undefined;
-        deckLayersRef.current.treeTrunks = undefined;
-        pushDeckLayers();
-        return;
-      }
-
-      type Tree = {
-        position: [number, number];
-        height: number;
-        wood: boolean;
-      };
-      const trees: Tree[] = [];
-
-      for (const feat of features) {
-        if (trees.length >= MAX_TREES) break;
-        const rings = ringsOf(feat.geometry);
-        if (!rings) continue;
-        // Deterministic seed from polygon bbox so the same park always
-        // gets the same tree layout — no flicker on every moveend.
-        const bbox = bboxOf(rings);
-        if (!bbox) continue;
-        const [minX, minY, maxX, maxY] = bbox;
-        const midLat = (minY + maxY) / 2;
-        const widthM = (maxX - minX) * 111_000 * Math.cos((midLat * Math.PI) / 180);
-        const heightM = (maxY - minY) * 111_000;
-        const areaM2 = Math.max(0, widthM * heightM);
-        // Areas under ~20 m² are usually round-abouts / road triangles
-        // — skip, they read as decorative lawn not a planted patch.
-        if (areaM2 < 20) continue;
-        const seed = hashCoord(minX, minY);
-        const rand = lcg(seed);
-        const woodFlag = feat.layer?.id === "green-volume-wood";
-        const targetCount = Math.min(
-          MAX_TREES - trees.length,
-          Math.max(2, Math.floor(areaM2 * DENSITY_TREES_PER_M2 * (woodFlag ? 1.3 : 0.6))),
-        );
-        let attempts = 0;
-        const maxAttempts = targetCount * 6;
-        let placed = 0;
-        while (placed < targetCount && attempts < maxAttempts) {
-          attempts += 1;
-          const x = minX + rand() * (maxX - minX);
-          const y = minY + rand() * (maxY - minY);
-          if (!pointInRings(x, y, rings)) continue;
-          // Wood trees are taller than park trees.
-          const baseH = woodFlag ? 11 : 7;
-          const height = baseH + rand() * 4;
-          trees.push({ position: [x, y], height, wood: woodFlag });
-          placed += 1;
-        }
-      }
-
-      if (trees.length === 0) {
-        deckLayersRef.current.trees = undefined;
-        deckLayersRef.current.treeTrunks = undefined;
-        pushDeckLayers();
-        return;
-      }
-
-      const isDark = themeRef.current === "dark";
-      const trunkColor: [number, number, number] = isDark
-        ? [62, 44, 28]
-        : [88, 62, 36];
-      // Slight per-tree colour variation keeps a planted block from
-      // looking like a printed pattern. Hash by position so it's stable.
-      const canopyColor = (t: Tree): [number, number, number, number] => {
-        const seed = hashCoord(t.position[0], t.position[1]);
-        const variant = ((seed >>> 8) & 0x3f) / 0x3f; // 0..1
-        if (isDark) {
-          const g = 70 + Math.round(variant * 30);
-          return [22, g, 36, 235];
-        }
-        const r = 60 + Math.round(variant * 30);
-        const g = 130 + Math.round(variant * 40);
-        return [r, g, 60, 235];
-      };
-
-      // Trunk: thin tall column (~25% of total height). ColumnLayer's
-      // `radius` is a layer-wide constant in deck.gl 9, not per-feature,
-      // so we keep a single value here and make height the per-tree var.
-      deckLayersRef.current.treeTrunks = new ColumnLayer({
-        id: "trees-trunks",
-        data: trees,
-        diskResolution: 6,
-        radius: 0.35,
-        radiusUnits: "meters",
-        extruded: true,
-        getPosition: (d: Tree) => d.position,
-        getElevation: (d: Tree) => d.height * 0.3,
-        getFillColor: trunkColor,
-        material: { ambient: 0.55, diffuse: 0.65, shininess: 4 },
-        parameters: { depthTest: true },
-      });
-      // Canopy: wider hex column. Because ColumnLayer can't set a per-
-      // instance base elevation, the canopy visually overlaps the trunk
-      // — but at courier zoom that just reads as "leafy column rooted
-      // in the ground" which is exactly the intent.
-      deckLayersRef.current.trees = new ColumnLayer({
-        id: "trees-canopy",
-        data: trees,
-        diskResolution: 8,
-        radius: 2.2,
-        radiusUnits: "meters",
-        extruded: true,
-        getPosition: (d: Tree) => d.position,
-        getElevation: (d: Tree) => d.height,
-        getFillColor: canopyColor,
-        material: { ambient: 0.4, diffuse: 0.85, shininess: 8 },
-        parameters: { depthTest: true },
-      });
-      pushDeckLayers();
-    };
-
-    const debouncedScatter = () => {
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(scatter, 220);
-    };
-
-    map.on("moveend", debouncedScatter);
-    map.on("idle", debouncedScatter);
-    debouncedScatter();
-
-    return () => {
-      cancelled = true;
-      if (timer) clearTimeout(timer);
-      map.off("moveend", debouncedScatter);
-      map.off("idle", debouncedScatter);
-      deckLayersRef.current.trees = undefined;
-      deckLayersRef.current.treeTrunks = undefined;
-      pushDeckLayers();
-    };
+    deckLayersRef.current.trees = undefined;
+    deckLayersRef.current.treeTrunks = undefined;
+    pushDeckLayers();
   }, []);
 
   // Refresh deck.gl SunLight every 5 minutes so the highlight direction
