@@ -1,46 +1,64 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { cn } from "@/lib/utils";
-import { findNearestImage, type FoundImage } from "@/lib/mapillary-search";
-
-const TOKEN = import.meta.env.VITE_MAPILLARY_TOKEN as string | undefined;
 
 // Default starting point: Palace Square, St Petersburg.
 const DEFAULT_LAT = 59.9398;
 const DEFAULT_LNG = 30.3146;
-const SEARCH_RADIUS_M = 800;
 
-type Status =
-  | { kind: "idle" }
-  | { kind: "searching" }
-  | { kind: "loaded"; found: FoundImage }
-  | { kind: "no-imagery" }
-  | { kind: "error"; message: string };
+type Coord = { lat: number; lng: number };
 
 /**
- * Build the URL for Mapillary's official embedded panorama viewer.
- * The embed page (https://www.mapillary.com/embed) is a full-blown
- * Angular SPA that runs THEIR own 360° photo viewer — same one you'd
- * see on mapillary.com itself: drag-to-rotate, click navigation arrows
- * on the ground to move between connected images, zoom, fullscreen,
- * compass, the lot. It uses Mapillary's own session/auth on their
- * domain, so we don't need our app's API token to have read scope.
+ * Build a Yandex Map Widget URL in street-view (panorama) mode.
+ *
+ * Why Yandex instead of Mapillary?
+ *   • Mapillary's www.mapillary.com (and tiles.mapillary.com) sit behind
+ *     Cloudflare, which is heavily DNS-blocked at most Russian ISPs —
+ *     embedding their viewer fails with "ERR_NAME_NOT_RESOLVED" for the
+ *     courier audience this app actually targets.
+ *   • Yandex Panoramas have an order of magnitude more coverage in
+ *     St Petersburg (full coverage of city centre + most of suburbs).
+ *   • The widget at https://yandex.ru/map-widget/v1 is an official,
+ *     iframe-friendly embed (no X-Frame-Options or frame-ancestors
+ *     restrictions), and requires no API key for non-commercial use.
+ *
+ * Reference: https://yandex.ru/dev/maps/embed/doc/dg/concepts/map-widget.html
  */
-function buildEmbedUrl(imageId: string) {
+function buildYandexPanoramaUrl({ lat, lng }: Coord) {
+  const point = `${lng.toFixed(6)},${lat.toFixed(6)}`;
   const params = new URLSearchParams({
-    image_key: imageId,
-    style: "photo",
-    map_style: "Mapillary streets",
+    ll: point,
+    z: "18",
+    l: "stv,sta", // street-view tiles + the panorama layer marker
+    "panorama[point]": point,
+    // direction: yaw 0° = north, pitch 0° = horizon. Faces north by default.
+    "panorama[direction]": "0,0",
+    // span: horizontal FOV ~120°, vertical ~60° — feels like walking eye level.
+    "panorama[span]": "120.000000,60.000000",
+    lang: "ru_RU",
   });
-  return `https://www.mapillary.com/embed?${params.toString()}`;
+  return `https://yandex.ru/map-widget/v1/?${params.toString()}`;
+}
+
+function buildYandexMapsExternalUrl({ lat, lng }: Coord) {
+  const point = `${lng.toFixed(6)},${lat.toFixed(6)}`;
+  const params = new URLSearchParams({
+    ll: point,
+    z: "18",
+    l: "stv,sta",
+    "panorama[point]": point,
+    "panorama[direction]": "0,0",
+    "panorama[span]": "120.000000,60.000000",
+  });
+  return `https://yandex.ru/maps/?${params.toString()}`;
 }
 
 export default function StreetView() {
   const [, setLocation] = useLocation();
-  const [status, setStatus] = useState<Status>({ kind: "idle" });
-  const [panoOnly, setPanoOnly] = useState(true);
 
-  const startCoord = useMemo(() => {
+  // The starting coordinate. Read once from the URL query string; updates
+  // happen via internal state (geolocation, manual reload).
+  const initialCoord = useMemo<Coord>(() => {
     const params = new URLSearchParams(window.location.search);
     const lat = Number(params.get("lat"));
     const lng = Number(params.get("lng"));
@@ -50,51 +68,11 @@ export default function StreetView() {
     return { lat: DEFAULT_LAT, lng: DEFAULT_LNG };
   }, []);
 
-  const search = (lat: number, lng: number, forcePano = panoOnly) => {
-    if (!TOKEN) {
-      setStatus({ kind: "error", message: "VITE_MAPILLARY_TOKEN не задан" });
-      return;
-    }
-    setStatus({ kind: "searching" });
-    findNearestImage(TOKEN, lat, lng, SEARCH_RADIUS_M, forcePano)
-      .then((found) => {
-        if (!found && forcePano) {
-          // Fall back to ANY image if no panorama within range.
-          return findNearestImage(TOKEN, lat, lng, SEARCH_RADIUS_M, false);
-        }
-        return found;
-      })
-      .then((found) => {
-        if (!found) {
-          setStatus({ kind: "no-imagery" });
-          return;
-        }
-        setStatus({ kind: "loaded", found });
-      })
-      .catch((err: unknown) => {
-        setStatus({
-          kind: "error",
-          message: err instanceof Error ? err.message : String(err),
-        });
-      });
-  };
-
-  // Initial search on mount.
-  useEffect(() => {
-    search(startCoord.lat, startCoord.lng);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Re-search when the pano-only toggle flips.
-  const togglePano = () => {
-    const next = !panoOnly;
-    setPanoOnly(next);
-    const c =
-      status.kind === "loaded"
-        ? { lat: status.found.lat, lng: status.found.lng }
-        : startCoord;
-    search(c.lat, c.lng, next);
-  };
+  const [coord, setCoord] = useState<Coord>(initialCoord);
+  // Bumping this key forces the iframe to remount, which Yandex needs in
+  // order to re-run its panorama lookup at the new point.
+  const [reloadKey, setReloadKey] = useState(0);
+  const [geoError, setGeoError] = useState<string | null>(null);
 
   // Esc → back to map.
   useEffect(() => {
@@ -106,25 +84,35 @@ export default function StreetView() {
   }, [setLocation]);
 
   const onUseGeolocation = () => {
-    if (!navigator.geolocation) return;
+    if (!navigator.geolocation) {
+      setGeoError("Геолокация недоступна в этом браузере");
+      return;
+    }
+    setGeoError(null);
     navigator.geolocation.getCurrentPosition(
-      (pos) => search(pos.coords.latitude, pos.coords.longitude),
-      (err) => {
-        setStatus({ kind: "error", message: `Геолокация: ${err.message}` });
+      (pos) => {
+        setCoord({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+        setReloadKey((k) => k + 1);
       },
+      (err) => setGeoError(`Геолокация: ${err.message}`),
       { enableHighAccuracy: true, timeout: 10000 },
     );
   };
 
-  const display =
-    status.kind === "loaded"
-      ? { lat: status.found.lat, lng: status.found.lng }
-      : startCoord;
-  const yandexUrl = `https://yandex.ru/maps/?ll=${display.lng}%2C${display.lat}&panorama%5Bpoint%5D=${display.lng}%2C${display.lat}&z=18`;
+  const onReload = () => setReloadKey((k) => k + 1);
+
+  const onResetToStart = () => {
+    setCoord(initialCoord);
+    setReloadKey((k) => k + 1);
+  };
+
+  const isAtStart =
+    Math.abs(coord.lat - initialCoord.lat) < 1e-6 &&
+    Math.abs(coord.lng - initialCoord.lng) < 1e-6;
 
   return (
     <div className="fixed inset-0 z-50 bg-black flex flex-col">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-background/95 backdrop-blur-sm">
+      <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-border bg-background/95 backdrop-blur-sm">
         <div className="flex items-center gap-3 min-w-0">
           <Link
             href="/map"
@@ -132,34 +120,23 @@ export default function StreetView() {
           >
             ← карта
           </Link>
-          <div className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
-            STREET&nbsp;VIEW · MAPILLARY
+          <div className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground hidden sm:block">
+            STREET&nbsp;VIEW · ЯНДЕКС&nbsp;ПАНОРАМЫ
           </div>
-          {status.kind === "loaded" && (
-            <div className="text-[9px] uppercase tracking-[0.18em] text-muted-foreground font-mono hidden sm:block">
-              {status.found.isPano ? "360° pano" : "perspective"} ·{" "}
-              {Math.round(status.found.distance)} м от запроса
-            </div>
-          )}
         </div>
         <div className="flex items-center gap-2">
+          {!isAtStart && (
+            <button
+              onClick={onResetToStart}
+              className="h-8 px-3 text-[10px] uppercase tracking-[0.18em] rounded-md border border-border hover:bg-muted transition-colors"
+              title="Вернуться к стартовой точке маршрута"
+            >
+              ⟲ к старту
+            </button>
+          )}
           <button
-            onClick={togglePano}
-            className={cn(
-              "h-8 px-3 text-[10px] uppercase tracking-[0.18em] rounded-md border border-border transition-colors",
-              panoOnly
-                ? "bg-primary text-primary-foreground"
-                : "hover:bg-muted",
-            )}
-            disabled={status.kind === "searching"}
-            title="Только сферические 360° фото"
-          >
-            ◯ только 360°
-          </button>
-          <button
-            onClick={() => search(startCoord.lat, startCoord.lng)}
+            onClick={onReload}
             className="h-8 px-3 text-[10px] uppercase tracking-[0.18em] rounded-md border border-border hover:bg-muted transition-colors"
-            disabled={status.kind === "searching"}
           >
             ↻ обновить
           </button>
@@ -170,89 +147,50 @@ export default function StreetView() {
             ◎ моё место
           </button>
           <a
-            href={yandexUrl}
+            href={buildYandexMapsExternalUrl(coord)}
             target="_blank"
             rel="noreferrer"
             className="h-8 px-3 text-[10px] uppercase tracking-[0.18em] rounded-md border border-border hover:bg-muted transition-colors flex items-center"
+            title="Открыть в полноразмерном Яндекс Картах"
           >
-            яндекс пано ↗
+            на весь экран ↗
           </a>
         </div>
       </div>
 
       <div className="relative flex-1 bg-black">
-        {status.kind === "loaded" && (
-          <iframe
-            key={status.found.id}
-            src={buildEmbedUrl(status.found.id)}
-            title="Mapillary street view"
-            className="absolute inset-0 w-full h-full border-0"
-            allow="fullscreen; accelerometer; gyroscope"
-          />
-        )}
+        <iframe
+          key={reloadKey}
+          src={buildYandexPanoramaUrl(coord)}
+          title="Yandex street panorama"
+          className="absolute inset-0 w-full h-full border-0"
+          allow="fullscreen; geolocation; accelerometer; gyroscope"
+          // Yandex sets cookies to identify pano sessions; allow them.
+          sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
+        />
 
-        {status.kind === "searching" && (
-          <Overlay>
-            <div className="text-sm uppercase tracking-[0.2em] animate-pulse">
-              ищу ближайшую панораму…
-            </div>
-          </Overlay>
-        )}
-        {status.kind === "no-imagery" && (
-          <Overlay>
-            <div className="text-sm uppercase tracking-[0.2em] text-yellow-300">
-              в радиусе {SEARCH_RADIUS_M} м панорам не найдено
-            </div>
-            <div className="mt-2 text-[11px] text-foreground/60 max-w-md text-center">
-              У Mapillary тут нет покрытия. В Yandex Панорамах СПб обычно есть — попробуй там.
-            </div>
-            <a
-              href={yandexUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="mt-4 h-9 px-4 text-[11px] uppercase tracking-[0.2em] rounded-md border border-border hover:bg-muted transition-colors flex items-center"
-            >
-              открыть в яндексе ↗
-            </a>
-          </Overlay>
-        )}
-        {status.kind === "error" && (
-          <Overlay>
-            <div className="text-sm uppercase tracking-[0.2em] text-red-400">
-              ошибка
-            </div>
-            <div className="mt-2 text-[11px] text-foreground/70 max-w-md text-center font-mono break-all px-4">
-              {status.message}
-            </div>
-          </Overlay>
-        )}
-
-        {status.kind === "loaded" && (
-          <div
-            className={cn(
-              "absolute bottom-3 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-md bg-background/70 border border-border backdrop-blur-sm",
-              "text-[10px] uppercase tracking-[0.2em] text-foreground/70 pointer-events-none",
-            )}
-          >
-            тяни — крутить · стрелки на земле — двигаться · колесо — зум
+        {geoError && (
+          <div className="absolute top-3 left-1/2 -translate-x-1/2 px-3 py-2 rounded-md bg-red-500/90 text-white text-[11px] uppercase tracking-[0.18em]">
+            {geoError}
           </div>
         )}
+
+        <div
+          className={cn(
+            "absolute bottom-3 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-md bg-background/70 border border-border backdrop-blur-sm",
+            "text-[10px] uppercase tracking-[0.2em] text-foreground/70 pointer-events-none max-w-[90vw] text-center",
+          )}
+        >
+          тяни — крутить · стрелки на земле — двигаться · колесо — зум
+        </div>
       </div>
 
-      <div className="px-4 py-2 border-t border-border bg-background/95 text-[10px] uppercase tracking-[0.18em] text-muted-foreground flex items-center justify-between">
-        <span>панорамы © Mapillary contributors · CC BY-SA</span>
-        <span className="font-mono">
-          {display.lat.toFixed(5)}, {display.lng.toFixed(5)}
+      <div className="px-4 py-2 border-t border-border bg-background/95 text-[10px] uppercase tracking-[0.18em] text-muted-foreground flex items-center justify-between gap-3">
+        <span className="truncate">панорамы © Яндекс</span>
+        <span className="font-mono shrink-0">
+          {coord.lat.toFixed(5)}, {coord.lng.toFixed(5)}
         </span>
       </div>
-    </div>
-  );
-}
-
-function Overlay({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 pointer-events-auto">
-      {children}
     </div>
   );
 }
