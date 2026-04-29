@@ -111,10 +111,13 @@ function buildBaseStyle(theme: "dark" | "light"): maplibregl.StyleSpecification 
         },
       },
       {
-        // Real ground photograph. Slight desaturation in dark mode keeps
-        // the building extrusions visually dominant; in light mode we
-        // boost contrast a touch so the photo doesn't look washed out
-        // under the day sun light we apply via setLight.
+        // Real ground photograph. We warm-tint the raster a touch so it
+        // matches the warmer Google-style palette instead of looking
+        // like a washed-out aerial-survey photograph (which is exactly
+        // what raw Esri imagery is). `raster-hue-rotate` shifts the
+        // overall tone toward yellow-warm, `raster-saturation` modestly
+        // boosts colour, and `raster-contrast` gives shadows real
+        // depth so trees / buildings on the photo read as 3D too.
         id: "satellite-tiles",
         type: "raster",
         source: "satellite",
@@ -124,15 +127,17 @@ function buildBaseStyle(theme: "dark" | "light"): maplibregl.StyleSpecification 
           theme === "dark"
             ? {
                 "raster-brightness-min": 0.0,
-                "raster-brightness-max": 0.7,
-                "raster-saturation": -0.15,
-                "raster-contrast": 0.1,
+                "raster-brightness-max": 0.65,
+                "raster-saturation": -0.05,
+                "raster-contrast": 0.18,
+                "raster-hue-rotate": 8,
               }
             : {
-                "raster-brightness-min": 0.05,
-                "raster-brightness-max": 0.95,
-                "raster-saturation": 0.0,
-                "raster-contrast": 0.12,
+                "raster-brightness-min": 0.06,
+                "raster-brightness-max": 1.0,
+                "raster-saturation": 0.18,
+                "raster-contrast": 0.22,
+                "raster-hue-rotate": 6,
               },
       },
     ],
@@ -335,14 +340,21 @@ function applySolarLight(map: MLMap, theme: "dark" | "light") {
 
 function applyAtmosphere(map: MLMap, theme: "dark" | "light") {
   try {
+    // Pull the time-of-day sun so the sky / horizon palette actually
+    // matches the lighting on the buildings — golden-warm at sunrise &
+    // sunset, neutral blue at midday, deep navy at night. Without this
+    // the sky is always the same colour and the scene reads as fake.
+    const { polar, color: sunColor } = computeSolarLight(new Date());
+    // High polar = sun near horizon → strong warm sunset palette.
+    const sunsetMix = Math.max(0, Math.min(1, (polar - 50) / 35));
     if (theme === "dark") {
       map.setSky({
-        "sky-color": "#0a1428",
-        "sky-horizon-blend": 0.55,
-        "horizon-color": "#1f2a3d",
-        "horizon-fog-blend": 0.8,
-        "fog-color": "#0c0e12",
-        "fog-ground-blend": 0.45,
+        "sky-color": sunsetMix > 0.4 ? "#1b1224" : "#0a1428",
+        "sky-horizon-blend": 0.5,
+        "horizon-color": sunsetMix > 0.4 ? "#5a3320" : "#1f2a3d",
+        "horizon-fog-blend": 0.85,
+        "fog-color": sunsetMix > 0.4 ? "#1a0e08" : "#0c0e12",
+        "fog-ground-blend": 0.55,
         "atmosphere-blend": [
           "interpolate",
           ["linear"],
@@ -350,34 +362,103 @@ function applyAtmosphere(map: MLMap, theme: "dark" | "light") {
           12,
           1,
           16,
-          0.55,
+          0.7,
           20,
-          0.15,
+          0.2,
         ],
       } as any);
     } else {
+      // Daytime / dawn / dusk warm gradient. The horizon picks up the
+      // sun colour so distant buildings fade into the same hue as the
+      // sun on their faces — that's the "they're really far away"
+      // depth cue Google has and we don't, until now.
+      const isWarmHour = sunsetMix > 0.3;
       map.setSky({
-        "sky-color": "#cbd9ec",
-        "sky-horizon-blend": 0.6,
-        "horizon-color": "#e2e8f0",
-        "horizon-fog-blend": 0.7,
-        "fog-color": "#dde2eb",
-        "fog-ground-blend": 0.4,
+        "sky-color": isWarmHour ? "#f3c590" : "#9fbedc",
+        "sky-horizon-blend": 0.65,
+        "horizon-color": isWarmHour ? sunColor : "#dbe6f0",
+        "horizon-fog-blend": 0.85,
+        "fog-color": isWarmHour ? "#f0d4ad" : "#cdd9e6",
+        "fog-ground-blend": 0.55,
         "atmosphere-blend": [
           "interpolate",
           ["linear"],
           ["zoom"],
           12,
-          0.95,
+          1,
           16,
-          0.45,
+          0.6,
           20,
-          0.1,
+          0.15,
         ],
       } as any);
     }
   } catch (err) {
     console.warn("[Map3D] setSky failed", err);
+  }
+}
+
+// Add cast shadows for buildings, projected onto the satellite ground
+// in the anti-sun direction. This is the single biggest "buildings are
+// really sitting on this photograph" cue we can ship without textured
+// 3D meshes — every box now has a real-feeling soft shadow that moves
+// with time of day, which is the gestalt cue Google Earth has and an
+// untextured extrusion stack does not.
+//
+// Implementation: a duplicate fill (NOT extrusion) layer of building
+// footprints, painted semi-transparent black, displaced via
+// `fill-translate` in map-pixel space along the projected sun-azimuth.
+// We sit the layer JUST BELOW `3d-buildings` so the part of the shadow
+// under the building itself is hidden by the extrusion — only the part
+// that *extends past the footprint* is visible, exactly like a real
+// cast shadow.
+function addBuildingShadows(map: MLMap, theme: "dark" | "light") {
+  if (map.getLayer("building-shadow")) return;
+  addOpenMapTilesVectorSource(map);
+  if (!map.getSource("openmaptiles")) return;
+  const { azimuth, polar } = computeSolarLight(new Date());
+  // Sun height above horizon: polar==0 → directly overhead, polar==90 → on
+  // horizon. Real shadow length = h / tan(altitude). altitude = 90-polar.
+  const altitudeRad = ((90 - polar) * Math.PI) / 180;
+  // Cap so a low sun doesn't produce kilometre-long pixel shadows that
+  // look wrong on screen. 2.4 ≈ shadow 2.4× building height, plenty.
+  const lenPerH = Math.min(
+    2.4,
+    1 / Math.max(0.18, Math.tan(altitudeRad)),
+  );
+  // Rough "average building height" we're projecting for. The fill
+  // layer can't read per-feature height into the translate paint
+  // expression (translate doesn't accept data expressions), so we
+  // approximate with one offset that looks right for the bulk of
+  // residential / commercial stock (~16 m).
+  const avgHeightM = 16;
+  // Convert metres → screen pixels at zoom 17 in Питер (~4 m/px). This
+  // is a fixed ratio because fill-translate is in pixels, not metres.
+  const metresPerPx = 4;
+  const lengthPx = (avgHeightM * lenPerH) / metresPerPx;
+  // Anti-sun direction (the side the shadow falls on). MapLibre +x = east,
+  // +y = south in map-pixel space when translate-anchor is "map".
+  const antiAzRad = ((azimuth + 180) * Math.PI) / 180;
+  const dx = Math.sin(antiAzRad) * lengthPx;
+  const dy = -Math.cos(antiAzRad) * lengthPx;
+  try {
+    map.addLayer({
+      id: "building-shadow",
+      type: "fill",
+      source: "openmaptiles",
+      "source-layer": "building",
+      minzoom: 14,
+      paint: {
+        "fill-color": "#000000",
+        "fill-opacity": theme === "dark" ? 0.32 : 0.28,
+        "fill-translate": [dx, dy],
+        "fill-translate-anchor": "map",
+        // No outline — pure soft pad of darkness on the ground.
+        "fill-antialias": true,
+      },
+    } as any);
+  } catch (err) {
+    console.warn("[Map3D] building shadows failed", err);
   }
 }
 
@@ -799,10 +880,16 @@ function add3DBuildings(map: MLMap, theme: "dark" | "light") {
   //   80 m+    → bright steel = небоскрёбы, ориентиры
   // The contrast between bands is intentionally bigger than before so
   // even a fast glance tells the courier "это жилой район" vs "это БЦ".
-  const buildingColor = isDark ? "#2a2620" : "#d6cfc1"; // low / warm
-  const buildingMid = isDark ? "#262a32" : "#c2c8d2"; // mid / neutral
-  const buildingTop = isDark ? "#2c3a4d" : "#9eaec3"; // tall / cool blue
-  const buildingTall = isDark ? "#3d557a" : "#7d92b4"; // tower / bright steel
+  // Natural palette tuned to *blend* with the satellite photograph rather
+  // than fight it. Crayon-bright extrusion colours (steel-blue towers,
+  // orange low-rises) make the scene look like Lego on top of a photo.
+  // Real Google-3D buildings have textured beige-grey facades; we
+  // approximate with desaturated cream → warm grey → cool grey, all
+  // close in luminance to the average satellite ground tone.
+  const buildingColor = isDark ? "#2a2620" : "#e6dcc9"; // low / warm cream
+  const buildingMid = isDark ? "#2a2c30" : "#cfc6b8"; // mid / soft beige-grey
+  const buildingTop = isDark ? "#2e3438" : "#b9b3aa"; // tall / cool grey
+  const buildingTall = isDark ? "#384048" : "#a39f97"; // tower / dark grey
 
   // Make sure the OpenMapTiles vector source is loaded — only used for 3D
   // building geometry on top of the OSM raster basemap.
@@ -1222,6 +1309,12 @@ export default function Map3D({
         // network is legible at a glance even where the photograph is
         // shadowed or noisy.
         addRoadOverlay(map, themeRef.current);
+        // Building cast shadows MUST be added before `add3DBuildings`
+        // so they sit BELOW the extrusion in z-order. The footprint
+        // under the building gets covered by the extrusion, leaving
+        // only the part that "extends past the wall" visible — exactly
+        // like a real shadow on the asphalt.
+        addBuildingShadows(map, themeRef.current);
         add3DBuildings(map, themeRef.current);
         // Parking mask is no longer needed against satellite imagery
         // (real parking lots already look like real asphalt), but keep
@@ -1587,16 +1680,21 @@ export default function Map3D({
       const approachM = nextManeuver?.distanceM ?? Infinity;
       const isApproachingTurn = nextManeuver != null && approachM < 120;
       const isVeryClose = nextManeuver != null && approachM < 45;
-      const baseZoom = hasHeading ? 18 : 17;
-      const baseTurnZoom = hasHeading ? 16.7 : 16.2;
+      const baseZoom = hasHeading ? 17.6 : 17;
+      const baseTurnZoom = hasHeading ? 16.5 : 16;
       const zoom = isApproachingTurn ? baseTurnZoom : baseZoom;
+      // Lowered pitch (62° instead of 72°) so the upper quarter of the
+      // viewport actually shows sky + horizon. Without visible horizon
+      // the scene reads as a flat texture viewed from above; with it
+      // the brain locks into "I'm in 3D space" instantly. Approaching a
+      // turn we drop further so the whole intersection fits in frame.
       const pitch = isApproachingTurn
         ? isVeryClose
-          ? 50
-          : 56
+          ? 42
+          : 50
         : hasHeading
-          ? 72
-          : Math.max(map.getPitch(), 60);
+          ? 62
+          : Math.max(map.getPitch(), 55);
       // When very close to the turn, also pull the user marker more
       // toward the centre (less bottom padding) so we see what's
       // happening on *both* sides of the intersection.
