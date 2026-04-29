@@ -35,6 +35,8 @@ import {
 } from "@/lib/routing";
 import L from "leaflet";
 import DeliveryMap, { type MapLayerMode } from "@/components/DeliveryMap";
+import Map3D from "@/components/Map3D";
+import MapillaryPanorama from "@/components/MapillaryPanorama";
 import DriveMode from "@/components/DriveMode";
 import { cn } from "@/lib/utils";
 
@@ -118,21 +120,40 @@ export default function MapView() {
   const [depotEditOpen, setDepotEditOpen] = useState(false);
   const mapRef = useRef<L.Map | null>(null);
   const [layerMode, setLayerMode] = useState<MapLayerMode>(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const fromUrl = params.get("layer") as MapLayerMode | null;
+      if (fromUrl && ["default", "detail", "satellite", "3d"].includes(fromUrl)) {
+        try { localStorage.setItem("map-layer", fromUrl); } catch {}
+        return fromUrl;
+      }
+    }
     return (localStorage.getItem("map-layer") as MapLayerMode) || "default";
   });
 
   const cycleLayer = () => {
-    const next: MapLayerMode = layerMode === "default" ? "detail" : layerMode === "detail" ? "satellite" : "default";
+    const order: MapLayerMode[] = ["default", "detail", "satellite", "3d"];
+    const idx = order.indexOf(layerMode);
+    const next = order[(idx + 1) % order.length];
     setLayerMode(next);
     localStorage.setItem("map-layer", next);
   };
 
-  const LAYER_LABEL: Record<MapLayerMode, string> = { default: "🗺", detail: "🏙", satellite: "🛰" };
+  const LAYER_LABEL: Record<MapLayerMode, string> = {
+    default: "🗺",
+    detail: "🏙",
+    satellite: "🛰",
+    "3d": "3D",
+  };
   const LAYER_TITLE: Record<MapLayerMode, string> = {
     default: "Стиль: тёмная/светлая карта",
     detail: "Стиль: детальная OSM (подъезды, все улицы)",
     satellite: "Стиль: спутник + подписи",
+    "3d": "Стиль: 3D-здания + панорамы (Mapillary)",
   };
+
+  // Mapillary panorama modal state
+  const [panorama, setPanorama] = useState<{ lat: number; lng: number; title?: string } | null>(null);
 
   const { position: userPosition, status: gpsStatus } = useGeolocation(gpsEnabled);
 
@@ -470,44 +491,92 @@ export default function MapView() {
           </div>
         </header>
 
-        <div className="rounded-2xl border border-border bg-card overflow-hidden relative">
-          <DeliveryMap
-            deliveries={mapDeliveries}
-            pending={isViewingFinishedWave ? [] : pendingForUi}
-            jobs={salary.jobs}
-            theme={salary.theme}
-            depot={salary.depot}
-            userPosition={userPosition}
-            followUser={false}
-            onMapClick={isViewingFinishedWave ? undefined : handleMapClick}
-            onDeliveryClick={(id) => setSelectedId(id)}
-            onPendingClick={(id) => setSelectedId(id)}
-            selectedId={selectedId}
-            flyTo={flyTo}
-            showRoute={showRoute}
-            showPendingRoute={!isViewingFinishedWave}
-            onMapReady={(m) => { mapRef.current = m; }}
-            layerMode={layerMode}
-            pendingRouteGeometry={
-              isViewingFinishedWave
-                ? visibleWave?.delivery?.geometry ?? null
-                : pendingRoute.route?.geometry ?? null
-            }
-          />
+        <div className="rounded-2xl border border-border bg-card overflow-hidden relative" style={{ minHeight: 520 }}>
+          {layerMode === "3d" ? (
+            <div className="absolute inset-0">
+              <Map3D
+                deliveries={mapDeliveries}
+                pending={isViewingFinishedWave ? [] : pendingForUi}
+                jobs={salary.jobs}
+                theme={salary.theme}
+                depot={salary.depot}
+                userPosition={userPosition}
+                followUser={false}
+                onMapClick={isViewingFinishedWave ? undefined : handleMapClick}
+                onDeliveryClick={(id) => setSelectedId(id)}
+                onPendingClick={(id) => setSelectedId(id)}
+                selectedId={selectedId}
+                flyTo={flyTo}
+                showRoute={showRoute}
+                showPendingRoute={!isViewingFinishedWave}
+                pendingRouteGeometry={
+                  isViewingFinishedWave
+                    ? visibleWave?.delivery?.geometry ?? null
+                    : pendingRoute.route?.geometry ?? null
+                }
+              />
+            </div>
+          ) : (
+            <DeliveryMap
+              deliveries={mapDeliveries}
+              pending={isViewingFinishedWave ? [] : pendingForUi}
+              jobs={salary.jobs}
+              theme={salary.theme}
+              depot={salary.depot}
+              userPosition={userPosition}
+              followUser={false}
+              onMapClick={isViewingFinishedWave ? undefined : handleMapClick}
+              onDeliveryClick={(id) => setSelectedId(id)}
+              onPendingClick={(id) => setSelectedId(id)}
+              selectedId={selectedId}
+              flyTo={flyTo}
+              showRoute={showRoute}
+              showPendingRoute={!isViewingFinishedWave}
+              onMapReady={(m) => { mapRef.current = m; }}
+              layerMode={layerMode}
+              pendingRouteGeometry={
+                isViewingFinishedWave
+                  ? visibleWave?.delivery?.geometry ?? null
+                  : pendingRoute.route?.geometry ?? null
+              }
+            />
+          )}
           {/* Zoom + layer controls */}
           <div className="absolute bottom-12 left-3 z-[500] flex flex-col gap-1">
             <button
               onClick={cycleLayer}
-              className="w-8 h-8 rounded-md border border-border bg-card/95 backdrop-blur text-[13px] flex items-center justify-center shadow hover:bg-muted transition-colors"
+              className={cn(
+                "w-8 h-8 rounded-md border border-border bg-card/95 backdrop-blur text-[13px] flex items-center justify-center shadow hover:bg-muted transition-colors font-bold",
+                layerMode === "3d" && "bg-blue-600 text-white border-blue-600",
+              )}
               title={LAYER_TITLE[layerMode]}
             >{LAYER_LABEL[layerMode]}</button>
             <button
-              onClick={() => mapRef.current?.zoomIn()}
+              onClick={() => {
+                const target = (() => {
+                  const dId = selectedId;
+                  if (!dId) return null;
+                  const d = deliveriesStore.deliveries.find((x) => x.id === dId);
+                  if (d) return { lat: d.lat, lng: d.lng, title: d.address };
+                  const p = deliveriesStore.pending.find((x) => x.id === dId);
+                  if (p) return { lat: p.lat, lng: p.lng, title: p.address };
+                  return null;
+                })();
+                if (target) setPanorama(target);
+                else if (userPosition)
+                  setPanorama({ lat: userPosition.lat, lng: userPosition.lng, title: "Моё местоположение" });
+              }}
+              disabled={!selectedId && !userPosition}
+              className="w-8 h-8 rounded-md border border-border bg-card/95 backdrop-blur text-[10px] font-bold flex items-center justify-center shadow hover:bg-muted transition-colors leading-none disabled:opacity-40 disabled:cursor-not-allowed"
+              title={selectedId ? "POV: панорама выбранной точки" : userPosition ? "POV: панорама моего места" : "Сначала выбери точку"}
+            >POV</button>
+            <button
+              onClick={() => (layerMode === "3d" ? null : mapRef.current?.zoomIn())}
               className="w-8 h-8 rounded-md border border-border bg-card/95 backdrop-blur text-[16px] font-bold flex items-center justify-center shadow hover:bg-muted transition-colors leading-none"
               title="Приблизить"
             >+</button>
             <button
-              onClick={() => mapRef.current?.zoomOut()}
+              onClick={() => (layerMode === "3d" ? null : mapRef.current?.zoomOut())}
               className="w-8 h-8 rounded-md border border-border bg-card/95 backdrop-blur text-[16px] font-bold flex items-center justify-center shadow hover:bg-muted transition-colors leading-none"
               title="Отдалить"
             >−</button>
@@ -629,6 +698,14 @@ export default function MapView() {
           }}
         />
       )}
+
+      <MapillaryPanorama
+        open={!!panorama}
+        lat={panorama?.lat ?? null}
+        lng={panorama?.lng ?? null}
+        title={panorama?.title}
+        onClose={() => setPanorama(null)}
+      />
     </div>
   );
 }

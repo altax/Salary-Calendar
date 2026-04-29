@@ -332,3 +332,97 @@
     inset: -1px;
   }
 }
+/* === Map3D markers (MapLibre GL) ============================== */
+.maplibregl-marker { will-change: transform; }
+.m3d-marker {
+  font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.m3d-delivery {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--mc, #888);
+  color: var(--mfg, #fff);
+  border: 1.5px solid rgba(0,0,0,0.55);
+  box-shadow: 0 0 0 2px rgba(0,0,0,0.5), 0 2px 6px rgba(0,0,0,0.55);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+}
+.m3d-pending {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--mc, #888);
+  border: 1.5px dashed var(--mc, #888);
+  box-shadow: 0 0 0 2px rgba(0,0,0,0.45), 0 2px 6px rgba(0,0,0,0.55);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+.m3d-pending-active {
+  background: var(--mc, #888);
+  color: #fff;
+  border-style: solid;
+  border-width: 2px;
+  box-shadow:
+    0 0 0 2px rgba(0,0,0,0.5),
+    0 0 0 7px color-mix(in srgb, var(--mc, #888) 30%, transparent),
+    0 4px 10px rgba(0,0,0,0.6);
+}
+.m3d-selected {
+  outline: 2px solid #3b82f6;
+  outline-offset: 2px;
+}
+.m3d-depot {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  background: #fafafa;
+  color: #0a0a0a;
+  border: 2px solid #fafafa;
+  box-shadow: 0 0 0 3px rgba(0,0,0,0.55), 0 4px 10px rgba(0,0,0,0.6);
+  font-size: 16px;
+  cursor: pointer;
+}
+.m3d-user {
+  position: relative;
+  width: 22px;
+  height: 22px;
+}
+.m3d-user-arrow {
+  position: absolute;
+  top: -4px;
+  left: 50%;
+  transform-origin: 50% 100%;
+  width: 0;
+  height: 0;
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-bottom: 10px solid #3b82f6;
+  pointer-events: none;
+}
+.m3d-user-dot {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #3b82f6;
+  border: 3px solid #fff;
+  box-shadow: 0 0 0 2px rgba(59,130,246,0.4), 0 2px 8px rgba(0,0,0,0.55);
+}
+
+/* MapLibre default attribution slimming for our dark theme */
+.maplibregl-ctrl-attrib {
+  font-size: 9px !important;
+  background: rgba(0,0,0,0.45) !important;
+  color: #aaa !important;
+}
+.maplibregl-ctrl-attrib a { color: #ddd !important; }
+.maplibregl-ctrl-group { background: rgba(20,20,24,0.85) !important; border: 1px solid var(--border) !important; }
+.maplibregl-ctrl-group button { filter: invert(0.9); }
