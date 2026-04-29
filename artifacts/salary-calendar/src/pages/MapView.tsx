@@ -422,12 +422,16 @@ export default function MapView() {
   }
 
   return (
-    <div className="h-[100dvh] w-full bg-background text-foreground overflow-hidden p-3 sm:p-4">
+    <div className="min-h-[100dvh] w-full bg-background text-foreground overflow-y-auto p-3 sm:p-4">
       <div
-        className="mx-auto w-full max-w-[1280px] h-full grid gap-3 min-h-0"
+        className="mx-auto w-full max-w-[1280px] min-h-[calc(100dvh-1.5rem)] sm:min-h-[calc(100dvh-2rem)] grid gap-3"
         style={{
           gridTemplateColumns: "minmax(0, 1fr) 340px",
-          gridTemplateRows: "auto minmax(0, 1fr)",
+          // Row 2 (map + sidebar) must be at least 520px tall so the 3D
+          // canvas always has room to render. With `minmax(0, 1fr)` the row
+          // could shrink to whatever was left after the header wrapped, which
+          // on narrow / short viewports squashed the map down to ~300px.
+          gridTemplateRows: "auto minmax(520px, 1fr)",
         }}
       >
         <header className="col-span-2 rounded-2xl border border-border bg-card flex items-center justify-between px-4 py-2.5 min-h-0 gap-3 flex-wrap">
@@ -491,7 +495,7 @@ export default function MapView() {
           </div>
         </header>
 
-        <div className="rounded-2xl border border-border bg-card overflow-hidden relative" style={{ minHeight: 520 }}>
+        <div className="rounded-2xl border border-border bg-card overflow-hidden relative h-full min-h-[520px]">
           {layerMode === "3d" ? (
             <div className="absolute inset-0">
               <Map3D
