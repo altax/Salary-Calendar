@@ -315,25 +315,7 @@ export default function Map3D({
     if (!containerRef.current) return;
     let cancelled = false;
 
-    // Walk the ancestor chain and report every box's actual rendered size +
-    // computed height/min-height. The single most common reason the canvas
-    // ends up at 300px is one of these ancestors collapsing — this log lets
-    // us see *which* one without the user having to use devtools.
-    const chain: string[] = [];
-    let node: HTMLElement | null = containerRef.current;
-    let depth = 0;
-    while (node && depth < 10) {
-      const r = node.getBoundingClientRect();
-      const cs = window.getComputedStyle(node);
-      const tag = node.tagName.toLowerCase();
-      const cls = (node.className || "").toString().slice(0, 40);
-      chain.push(
-        `${depth} <${tag}.${cls}> ${Math.round(r.width)}x${Math.round(r.height)} h=${cs.height} minH=${cs.minHeight} display=${cs.display}`,
-      );
-      node = node.parentElement;
-      depth += 1;
-    }
-    console.log("[Map3D] init start — container chain:\n" + chain.join("\n"));
+    console.log("[Map3D] init start");
     setLoading(true);
 
     let map: MLMap;
