@@ -4,6 +4,9 @@ import maplibregl, {
   Marker as MLMarker,
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+import SunCalc from "suncalc";
+import { MapboxOverlay } from "@deck.gl/mapbox";
+import { PathLayer } from "@deck.gl/layers";
 import { cn } from "@/lib/utils";
 import type { Delivery, PendingOrder } from "@/lib/deliveries";
 import type { ResolvedJob, Depot } from "@/lib/store";
@@ -287,37 +290,50 @@ function applyDarkTheme(map: MLMap, theme: "dark" | "light") {
   }
 }
 
-// Approximate the sun/moon position from the local clock so the 3D building
-// shading actually matches what the courier sees out of the window. We do
-// not need astronomical precision — what matters is that morning light
-// comes from the east and is warm, noon light is overhead and white,
-// evening light is from the west and warm, and nighttime is low/blue.
-function computeSolarLight(date: Date): {
-  azimuth: number;
-  polar: number;
-  intensity: number;
-  color: string;
-} {
-  const h = date.getHours() + date.getMinutes() / 60;
-  const isDay = h >= 5 && h <= 22;
-  if (!isDay) {
-    return { azimuth: 0, polar: 35, intensity: 0.18, color: "#9ab3d4" };
+// Astronomically correct sun position for the courier's actual lat/lng &
+// local time, courtesy of `suncalc`. SunCalc returns:
+//   altitude — radians above horizon (>0 day, <0 night)
+//   azimuth  — radians from south, west-positive (NOTE: NOT from north!)
+// We translate to MapLibre's convention:
+//   azimuth — degrees clockwise from north
+//   polar   — degrees from straight up (0=zenith, 90=horizon)
+// and pick a colour temperature that matches real-world light: deep blue
+// at night, warm orange near sunrise/sunset, neutral white at midday.
+function computeSolarLight(
+  date: Date,
+  lat = 59.9343, // default to SPb so it works even before first GPS fix
+  lng = 30.3351,
+): { azimuth: number; polar: number; intensity: number; color: string } {
+  const sun = SunCalc.getPosition(date, lat, lng);
+  // SunCalc azimuth: 0 = south, +west. Map convention: 0 = north, +east.
+  // North-from-south is +180°, then we flip the sign because we want the
+  // *direction the sun is in*, not the direction it points to.
+  const azimuth = ((sun.azimuth * 180) / Math.PI + 180 + 360) % 360;
+  const altitudeDeg = (sun.altitude * 180) / Math.PI;
+  // Below horizon → render moon-like cool light from anti-sun direction
+  // so the city doesn't go pitch-black. We still want SOME shading so 3D
+  // is readable; pick a fixed low elevation moon-ish position.
+  if (altitudeDeg < -2) {
+    return {
+      azimuth: (azimuth + 180) % 360,
+      polar: 80,
+      intensity: 0.12,
+      color: "#8aa7d4",
+    };
   }
-  // Map 6am → east (90°), 12pm → south (180°), 6pm → west (270°). Linear
-  // interpolation is good enough for a stylised navigator.
-  const dayProgress = Math.min(1, Math.max(0, (h - 6) / 12));
-  const azimuth = 90 + dayProgress * 180;
-  // Polar: 90° = sun on the horizon, 0° = directly overhead. We swing
-  // between 75° at sunrise/sunset and 30° at noon so building sides get
-  // long shadows in the morning/evening (which reads as 3D) and shorter
-  // ones at midday.
-  const polar = 30 + Math.abs(dayProgress - 0.5) * 2 * 45;
-  // Intensity peaks at solar noon and tapers near sunrise/sunset.
-  const intensity = 0.55 - Math.abs(dayProgress - 0.5) * 0.3;
-  // Warm color near sunrise/sunset, neutral white at midday.
+  // Polar = 90° - altitude. Clamp to keep the sun above the rendered horizon.
+  const polar = Math.max(2, Math.min(88, 90 - altitudeDeg));
+  // Intensity: peaks at noon-ish, soft at horizon. Use a smooth curve.
+  const intensity = Math.max(
+    0.15,
+    Math.min(0.6, 0.15 + Math.sin((Math.PI * altitudeDeg) / 180) * 0.55),
+  );
+  // Colour temperature: warm near horizon, white at zenith. Anchored at
+  // ~3000 K (golden hour) → ~5800 K (midday).
   let color = "#ffffff";
-  if (h < 8 || h > 18) color = "#ffcfa0";
-  else if (h < 9 || h > 17) color = "#fff1d9";
+  if (altitudeDeg < 6) color = "#ff9f5a"; // golden hour
+  else if (altitudeDeg < 12) color = "#ffd28a"; // soft warm
+  else if (altitudeDeg < 25) color = "#fff1d2"; // morning / late afternoon
   return { azimuth, polar, intensity, color };
 }
 
@@ -1137,6 +1153,9 @@ export default function Map3D({
   const markersRef = useRef<Map<string, MLMarker>>(new Map());
   const userMarkerRef = useRef<MLMarker | null>(null);
   const isLoadedRef = useRef(false);
+  // deck.gl overlay shares the MapLibre WebGL context and renders 3D
+  // content (route ribbon, future glTF models) on top of the basemap.
+  const deckOverlayRef = useRef<MapboxOverlay | null>(null);
   const themeRef = useRef(theme);
   themeRef.current = theme;
   const [initError, setInitError] = useState<string | null>(null);
@@ -1492,6 +1511,21 @@ export default function Map3D({
         console.warn("[Map3D] route layers failed", err);
       }
 
+      // Mount deck.gl as a MapLibre custom layer. It piggybacks on the
+      // same WebGL context (no extra canvas, no z-fighting with markers)
+      // and lets us render true 3D content (extruded ribbons, glTF models,
+      // 3D-Tiles streams) interleaved with map layers.
+      try {
+        const overlay = new MapboxOverlay({
+          interleaved: true,
+          layers: [],
+        });
+        map.addControl(overlay as unknown as maplibregl.IControl);
+        deckOverlayRef.current = overlay;
+      } catch (err) {
+        console.warn("[Map3D] deck.gl overlay failed", err);
+      }
+
       onMapReady?.(map);
     });
 
@@ -1787,6 +1821,46 @@ export default function Map3D({
       geometry: { type: "LineString", coordinates: activeRouteGeometry.map(([lat, lng]) => [lng, lat]) },
       properties: {},
     } as any);
+  }, [activeRouteGeometry, showRoute]);
+
+  // 3D route ribbon via deck.gl. The flat blue stripe on the asphalt
+  // (above) tells the courier WHICH road to follow; this hovering ribbon
+  // ~5 m up gives the navigation a real volumetric "neon trail" feel
+  // that reads as 3D from any pitch — the single biggest visual upgrade
+  // we get from deck.gl on day one.
+  useEffect(() => {
+    const overlay = deckOverlayRef.current;
+    if (!overlay) return;
+    if (!showRoute || !activeRouteGeometry || activeRouteGeometry.length < 2) {
+      overlay.setProps({ layers: [] });
+      return;
+    }
+    // PathLayer eats [lng, lat, z] tuples. Lift each vertex 5 metres so
+    // the ribbon floats just above buildings' ground floor and stays
+    // visible when the camera is pitched steeply.
+    const path = activeRouteGeometry.map(
+      ([lat, lng]) => [lng, lat, 5] as [number, number, number],
+    );
+    const ribbon = new PathLayer({
+      id: "route-3d-ribbon",
+      data: [{ path }],
+      getPath: (d: any) => d.path,
+      // Bright cyan-blue gradient that matches our flat route casing.
+      getColor: [70, 160, 255, 220],
+      getWidth: 6,
+      widthUnits: "meters",
+      widthMinPixels: 4,
+      widthMaxPixels: 28,
+      capRounded: true,
+      jointRounded: true,
+      billboard: false,
+      parameters: {
+        // Render translucent against everything else, but still write to
+        // depth so it occludes itself correctly along sharp turns.
+        depthTest: true,
+      },
+    });
+    overlay.setProps({ layers: [ribbon] });
   }, [activeRouteGeometry, showRoute]);
 
   useEffect(() => {

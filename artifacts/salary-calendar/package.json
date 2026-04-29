@@ -47,6 +47,7 @@
     "@types/node": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
+    "@types/suncalc": "^1.9.2",
     "@vitejs/plugin-react": "catalog:",
     "@workspace/api-client-react": "workspace:*",
     "class-variance-authority": "catalog:",
@@ -75,9 +76,15 @@
     "zod": "catalog:"
   },
   "dependencies": {
+    "@deck.gl/core": "^9.3.1",
+    "@deck.gl/layers": "^9.3.1",
+    "@deck.gl/mapbox": "^9.3.1",
+    "@deck.gl/mesh-layers": "^9.3.1",
     "@types/leaflet": "^1.9.21",
+    "deck.gl": "^9.3.1",
     "leaflet": "^1.9.4",
     "maplibre-gl": "^5.24.0",
-    "react-leaflet": "^5.0.0"
+    "react-leaflet": "^5.0.0",
+    "suncalc": "^1.9.0"
   }
 }
