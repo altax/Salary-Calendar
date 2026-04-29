@@ -16,12 +16,25 @@ const SPB_CENTER: [number, number] = [30.3351, 59.9343];
 // `tiles.openfreemap.org` is intermittently unreachable in some networks (RU).
 // The browser hits the same origin it loaded the app from — no VPN required.
 const OPENFREEMAP_PROXY_PREFIX = "/_tiles/openfreemap";
-const OPENFREEMAP_STYLE_URL = `${OPENFREEMAP_PROXY_PREFIX}/styles/liberty`;
 const OPENFREEMAP_UPSTREAM = "https://tiles.openfreemap.org";
 
+function proxyOrigin(): string {
+  if (typeof window !== "undefined" && window.location?.origin) {
+    return window.location.origin;
+  }
+  return "";
+}
+
+const OPENFREEMAP_STYLE_URL = `${proxyOrigin()}${OPENFREEMAP_PROXY_PREFIX}/styles/liberty`;
+
 function rewriteOpenFreeMapUrl(url: string): string {
+  // MapLibre loads tiles inside a Web Worker which cannot resolve relative
+  // URLs against window.location, so always return an absolute URL.
   if (url.startsWith(OPENFREEMAP_UPSTREAM)) {
-    return OPENFREEMAP_PROXY_PREFIX + url.slice(OPENFREEMAP_UPSTREAM.length);
+    return proxyOrigin() + OPENFREEMAP_PROXY_PREFIX + url.slice(OPENFREEMAP_UPSTREAM.length);
+  }
+  if (url.startsWith(OPENFREEMAP_PROXY_PREFIX)) {
+    return proxyOrigin() + url;
   }
   return url;
 }
