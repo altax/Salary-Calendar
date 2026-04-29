@@ -336,6 +336,42 @@ export default function Map3D({
       console.warn("[Map3D] runtime error:", msg, e);
     });
 
+    let tileOk = 0;
+    let tileFail = 0;
+    map.on("dataloading", (e: any) => {
+      if (e.dataType === "source" && e.tile) {
+        // eslint-disable-next-line no-console
+        console.log("[Map3D] tile loading", e.sourceId, e.tile?.tileID?.canonical);
+      }
+    });
+    map.on("data", (e: any) => {
+      if (e.dataType === "source" && e.tile && e.isSourceLoaded) {
+        tileOk += 1;
+      }
+    });
+    map.on("idle", () => {
+      const canvas = map.getCanvas();
+      // eslint-disable-next-line no-console
+      console.log(
+        "[Map3D] idle — canvas:",
+        canvas.width,
+        "x",
+        canvas.height,
+        "css:",
+        canvas.clientWidth,
+        "x",
+        canvas.clientHeight,
+        "tiles ok:",
+        tileOk,
+        "fail:",
+        tileFail,
+        "center:",
+        map.getCenter(),
+        "zoom:",
+        map.getZoom(),
+      );
+    });
+
     map.addControl(
       new maplibregl.NavigationControl({ visualizePitch: true }),
       "top-right",
@@ -343,9 +379,19 @@ export default function Map3D({
 
     map.on("load", () => {
       if (cancelled) return;
-      console.log("[Map3D] map loaded");
+      console.log("[Map3D] map loaded — forcing resize");
       isLoadedRef.current = true;
       setLoading(false);
+
+      // Force MapLibre to re-measure the container in case its dimensions
+      // weren't yet finalised when the map was constructed (common when the
+      // map mounts inside a flex/grid that resolves its size after first
+      // paint).
+      try {
+        map.resize();
+      } catch (err) {
+        console.warn("[Map3D] resize failed", err);
+      }
 
       try {
         // NOTE: applyDarkTheme is intentionally disabled — it caused style
