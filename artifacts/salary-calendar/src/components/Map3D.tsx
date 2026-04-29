@@ -553,7 +553,10 @@ function getDemSource(): any {
     maxzoom: 12,
     worker: true,
     cacheSize: 100,
-    timeoutMs: 10_000,
+    // 4s instead of 10s — AWS Terrarium tiles are slow from RU and a long
+    // timeout just means each missed tile blocks a worker for 10s, gumming
+    // up subsequent fetches. Better to fail fast and let terrain degrade.
+    timeoutMs: 4_000,
   });
   demSourceSingleton.setupMaplibre(maplibregl);
   return demSourceSingleton;
@@ -743,14 +746,47 @@ function addRoadOverlay(map: MLMap, theme: "dark" | "light") {
       paint: {
         "line-color": theme === "dark" ? "#0f1418" : "#ffffff",
         "line-opacity": theme === "dark" ? 0.6 : 0.85,
+        // NOTE: must be a standalone top-level interpolate over ["zoom"].
+        // MapLibre forbids nesting `["zoom"]` inside arithmetic ops, so we
+        // can't reuse `widthExpr` here via `["*", widthExpr, 1.6]` — we
+        // hard-code the casing widths (slightly bigger than `widthExpr`
+        // per class) instead.
         "line-width": [
           "interpolate",
-          ["linear"],
+          ["exponential", 1.4],
           ["zoom"],
           12,
-          ["*", widthExpr, 1.6],
+          [
+            "match",
+            ["get", "class"],
+            "motorway",
+            3.2,
+            "trunk",
+            2.6,
+            "primary",
+            2.0,
+            "secondary",
+            1.5,
+            1.0,
+          ],
           18,
-          ["+", widthExpr, 4],
+          [
+            "match",
+            ["get", "class"],
+            "motorway",
+            22,
+            "trunk",
+            19,
+            "primary",
+            16,
+            "secondary",
+            14,
+            "tertiary",
+            12,
+            "service",
+            8,
+            10,
+          ],
         ],
       },
     } as any);
@@ -1136,13 +1172,11 @@ function add3DBuildings(map: MLMap, theme: "dark" | "light") {
         "fill-extrusion-base": baseExpr,
         "fill-extrusion-opacity": 0.94,
         "fill-extrusion-vertical-gradient": true,
-        // Ambient occlusion: darkens the *base* of every building where
-        // it meets the ground and the corners between adjacent walls.
-        // Single highest-leverage paint property for "this is grounded
-        // 3D, not floating Lego" — without it the buildings look like
-        // they're hovering above the satellite photo. MapLibre 3.x+.
-        "fill-extrusion-ambient-occlusion-intensity": 0.4,
-        "fill-extrusion-ambient-occlusion-radius": 4.0,
+        // NOTE: `fill-extrusion-ambient-occlusion-*` exists in Mapbox GL JS
+        // but is NOT a MapLibre paint property — adding it spams the console
+        // with "unknown property" errors and the AO never renders anyway.
+        // Building grounding instead comes from the deck.gl SunLight pass
+        // and `fill-extrusion-vertical-gradient` above.
       },
     } as any,
     beforeId,
@@ -1436,6 +1470,16 @@ export default function Map3D({
 
     map.on("error", (e: any) => {
       const msg = e?.error?.message ?? String(e?.error ?? e);
+      // Tile fetch errors are expected on flaky links (especially the AWS
+      // Terrarium DEM bucket — slow from RU). Terrain & contour lines
+      // degrade silently when tiles fail to load, so don't spam the
+      // console with one warning per missed tile.
+      if (
+        e?.tile != null ||
+        /timed out|Failed to fetch|NetworkError|AbortError/i.test(msg)
+      ) {
+        return;
+      }
       console.warn("[Map3D] runtime error:", msg, e);
     });
 

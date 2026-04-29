@@ -1,0 +1,554 @@
+[Map3D] init start
+Map3D.tsx:1473 [Map3D] map loaded — forcing resize
+Map3D.tsx:1439 [Map3D] runtime error: layers.road-overlay-casing.paint.line-width: "zoom" expression may only be used as input to a top-level "step" or "interpolate" expression. vt
+(anonymous) @ Map3D.tsx:1439
+Map3D.tsx:1439 [Map3D] runtime error: layers.3d-buildings.paint.fill-extrusion-ambient-occlusion-intensity: unknown property "fill-extrusion-ambient-occlusion-intensity" vt
+(anonymous) @ Map3D.tsx:1439
+Map3D.tsx:1439 [Map3D] runtime error: layers.3d-buildings.paint.fill-extrusion-ambient-occlusion-radius: unknown property "fill-extrusion-ambient-occlusion-radius" vt
+(anonymous) @ Map3D.tsx:1439
+Map3D.tsx:1439 [Map3D] runtime error: Error: timed out vt
+(anonymous) @ Map3D.tsx:1439
+Map3D.tsx:1439 [Map3D] runtime error: Error: timed out vt
+(anonymous) @ Map3D.tsx:1439
+Map3D.tsx:1439 [Map3D] runtime error: Error: timed out vt
+(anonymous) @ Map3D.tsx:1439
+Map3D.tsx:1439 [Map3D] runtime error: Error: timed out vt
+(anonymous) @ Map3D.tsx:1439
+Map3D.tsx:1439 [Map3D] runtime error: Error: timed out vt
+(anonymous) @ Map3D.tsx:1439
+Map3D.tsx:1439 [Map3D] runtime error: Error: timed out vt
+(anonymous) @ Map3D.tsx:1439
+Map3D.tsx:1439 [Map3D] runtime error: Error: timed out vt
+(anonymous) @ Map3D.tsx:1439
+Map3D.tsx:1439 [Map3D] runtime error: Error: timed out vt
+(anonymous) @ Map3D.tsx:1439
+Map3D.tsx:1439 [Map3D] runtime error: Error: timed out vt {error: Error: Error: timed out
+    at Actor.<anonymous> (https://d2ecd287-75d3-4a92-9e12-c63090ad4875-00-1…, tile: de, type: 'error', target: ds, isSourceLoaded: true, …}
+(anonymous) @ Map3D.tsx:1439
+fire @ maplibre-gl.js?v=998df418:496
+fire @ maplibre-gl.js?v=998df418:500
+fire @ maplibre-gl.js?v=998df418:500
+fire @ maplibre-gl.js?v=998df418:500
+(anonymous) @ maplibre-gl.js?v=998df418:14959
+a2 @ maplibre-gl.js?v=998df418:42
+Map3D.tsx:1439 [Map3D] runtime error: Error: timed out vt {error: Error: Error: timed out
+    at Actor.<anonymous> (https://d2ecd287-75d3-4a92-9e12-c63090ad4875-00-1…, tile: de, type: 'error', target: ds, isSourceLoaded: true, …}
+(anonymous) @ Map3D.tsx:1439
+fire @ maplibre-gl.js?v=998df418:496
+fire @ maplibre-gl.js?v=998df418:500
+fire @ maplibre-gl.js?v=998df418:500
+fire @ maplibre-gl.js?v=998df418:500
+(anonymous) @ maplibre-gl.js?v=998df418:14959
+a2 @ maplibre-gl.js?v=998df418:42
+Map3D.tsx:1439 [Map3D] runtime error: Error: timed out vt {error: Error: Error: timed out
+    at Actor.<anonymous> (https://d2ecd287-75d3-4a92-9e12-c63090ad4875-00-1…, tile: de, type: 'error', target: ds, isSourceLoaded: true, …}
+(anonymous) @ Map3D.tsx:1439
+fire @ maplibre-gl.js?v=998df418:496
+fire @ maplibre-gl.js?v=998df418:500
+fire @ maplibre-gl.js?v=998df418:500
+fire @ maplibre-gl.js?v=998df418:500
+(anonymous) @ maplibre-gl.js?v=998df418:14959
+a2 @ maplibre-gl.js?v=998df418:42
+Map3D.tsx:1457 [Map3D] first idle — canvas 410x520, tiles loaded: 20, zoom 14.00
+Map3D.tsx:1439 [Map3D] runtime error: Error: timed out vt {error: Error: Error: timed out
+    at Actor.<anonymous> (https://d2ecd287-75d3-4a92-9e12-c63090ad4875-00-1…, tile: de, type: 'error', target: ds, isSourceLoaded: true, …}
+(anonymous) @ Map3D.tsx:1439
+fire @ maplibre-gl.js?v=998df418:496
+fire @ maplibre-gl.js?v=998df418:500
+fire @ maplibre-gl.js?v=998df418:500
+fire @ maplibre-gl.js?v=998df418:500
+(anonymous) @ maplibre-gl.js?v=998df418:14959
+a2 @ maplibre-gl.js?v=998df418:42
+postMessage
+postMessage @ a8ec0f54-610c-4155-9c0f-1bd9a65f3cec:1778
+(anonymous) @ a8ec0f54-610c-4155-9c0f-1bd9a65f3cec:1765
+rejected @ a8ec0f54-610c-4155-9c0f-1bd9a65f3cec:270
+Map3D.tsx:1439 [Map3D] runtime error: TypeError: Failed to fetch vt {error: Error: TypeError: Failed to fetch
+    at Actor.<anonymous> (https://d2ecd287-75d3-4a92-9e12-c63090a…, tile: de, type: 'error', target: ds, isSourceLoaded: true, …}
+(anonymous) @ Map3D.tsx:1439
+fire @ maplibre-gl.js?v=998df418:496
+fire @ maplibre-gl.js?v=998df418:500
+fire @ maplibre-gl.js?v=998df418:500
+fire @ maplibre-gl.js?v=998df418:500
+(anonymous) @ maplibre-gl.js?v=998df418:14959
+a2 @ maplibre-gl.js?v=998df418:42
+Promise.then
+l2 @ maplibre-gl.js?v=998df418:51
+(anonymous) @ maplibre-gl.js?v=998df418:53
+e @ maplibre-gl.js?v=998df418:32
+_loadTile @ maplibre-gl.js?v=998df418:14954
+_addTile @ maplibre-gl.js?v=998df418:15123
+_updateRetainedTiles @ maplibre-gl.js?v=998df418:15110
+update @ maplibre-gl.js?v=998df418:15069
+update @ maplibre-gl.js?v=998df418:22323
+_render @ maplibre-gl.js?v=998df418:23207
+(anonymous) @ maplibre-gl.js?v=998df418:23226
+(anonymous) @ maplibre-gl.js?v=998df418:12993
+requestAnimationFrame
+frame @ maplibre-gl.js?v=998df418:12992
+triggerRepaint @ maplibre-gl.js?v=998df418:23223
+_requestFrame @ maplibre-gl.js?v=998df418:21935
+_triggerRenderFrame @ maplibre-gl.js?v=998df418:21940
+Yr.handleEvent @ maplibre-gl.js?v=998df418:21785
+Map3D.tsx:1380 [Map3D] init start
+Map3D.tsx:1473 [Map3D] map loaded — forcing resize
+Map3D.tsx:1439 [Map3D] runtime error: layers.road-overlay-casing.paint.line-width: "zoom" expression may only be used as input to a top-level "step" or "interpolate" expression. vt {error: Error: layers.road-overlay-casing.paint.line-width: "zoom" expression may only be used as input to …, type: 'error', target: ds, style: ki}
+(anonymous) @ Map3D.tsx:1439
+fire @ maplibre-gl.js?v=998df418:496
+fire @ maplibre-gl.js?v=998df418:500
+hs @ maplibre-gl.js?v=998df418:3408
+Li @ maplibre-gl.js?v=998df418:18493
+_validate @ maplibre-gl.js?v=998df418:19130
+addLayer @ maplibre-gl.js?v=998df418:18872
+addLayer @ maplibre-gl.js?v=998df418:23040
+addRoadOverlay @ Map3D.tsx:735
+(anonymous) @ Map3D.tsx:1506
+fire @ maplibre-gl.js?v=998df418:496
+_render @ maplibre-gl.js?v=998df418:23207
+(anonymous) @ maplibre-gl.js?v=998df418:23226
+(anonymous) @ maplibre-gl.js?v=998df418:12993
+requestAnimationFrame
+frame @ maplibre-gl.js?v=998df418:12992
+triggerRepaint @ maplibre-gl.js?v=998df418:23223
+_render @ maplibre-gl.js?v=998df418:23209
+(anonymous) @ maplibre-gl.js?v=998df418:23226
+(anonymous) @ maplibre-gl.js?v=998df418:12993
+requestAnimationFrame
+frame @ maplibre-gl.js?v=998df418:12992
+triggerRepaint @ maplibre-gl.js?v=998df418:23223
+_render @ maplibre-gl.js?v=998df418:23209
+(anonymous) @ maplibre-gl.js?v=998df418:23226
+(anonymous) @ maplibre-gl.js?v=998df418:12993
+requestAnimationFrame
+frame @ maplibre-gl.js?v=998df418:12992
+triggerRepaint @ maplibre-gl.js?v=998df418:23223
+_render @ maplibre-gl.js?v=998df418:23209
+(anonymous) @ maplibre-gl.js?v=998df418:23226
+(anonymous) @ maplibre-gl.js?v=998df418:12993
+requestAnimationFrame
+frame @ maplibre-gl.js?v=998df418:12992
+triggerRepaint @ maplibre-gl.js?v=998df418:23223
+_update @ maplibre-gl.js?v=998df418:23186
+(anonymous) @ maplibre-gl.js?v=998df418:22651
+fire @ maplibre-gl.js?v=998df418:496
+fire @ maplibre-gl.js?v=998df418:500
+fire @ maplibre-gl.js?v=998df418:500
+fire @ maplibre-gl.js?v=998df418:500
+_tileLoaded @ maplibre-gl.js?v=998df418:15016
+(anonymous) @ maplibre-gl.js?v=998df418:14957
+o2 @ maplibre-gl.js?v=998df418:35
+Promise.then
+l2 @ maplibre-gl.js?v=998df418:51
+(anonymous) @ maplibre-gl.js?v=998df418:53
+e @ maplibre-gl.js?v=998df418:32
+_loadTile @ maplibre-gl.js?v=998df418:14954
+_addTile @ maplibre-gl.js?v=998df418:15123
+_updateRetainedTiles @ maplibre-gl.js?v=998df418:15103
+update @ maplibre-gl.js?v=998df418:15069
+_updateSources @ maplibre-gl.js?v=998df418:19148
+_render @ maplibre-gl.js?v=998df418:23207
+(anonymous) @ maplibre-gl.js?v=998df418:23226
+(anonymous) @ maplibre-gl.js?v=998df418:12993
+requestAnimationFrame
+frame @ maplibre-gl.js?v=998df418:12992
+triggerRepaint @ maplibre-gl.js?v=998df418:23223
+_update @ maplibre-gl.js?v=998df418:23186
+(anonymous) @ maplibre-gl.js?v=998df418:22642
+fire @ maplibre-gl.js?v=998df418:496
+setTerrain @ maplibre-gl.js?v=998df418:22968
+_load @ maplibre-gl.js?v=998df418:18578
+(anonymous) @ maplibre-gl.js?v=998df418:18565
+Promise.then
+loadJSON @ maplibre-gl.js?v=998df418:18564
+_updateStyle @ maplibre-gl.js?v=998df418:22905
+setStyle @ maplibre-gl.js?v=998df418:22891
+ds @ maplibre-gl.js?v=998df418:22645
+(anonymous) @ Map3D.tsx:1385
+react-stack-bottom-frame @ react-dom_client.js?v=998df418:17478
+runWithFiberInDEV @ react-dom_client.js?v=998df418:1485
+commitHookEffectListMount @ react-dom_client.js?v=998df418:8460
+commitHookPassiveMountEffects @ react-dom_client.js?v=998df418:8518
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9887
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9984
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9984
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9881
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9881
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9984
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9881
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9881
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9881
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9984
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9881
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9984
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9881
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9881
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9984
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9881
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9881
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9899
+flushPassiveEffects @ react-dom_client.js?v=998df418:11302
+flushPendingEffects @ react-dom_client.js?v=998df418:11276
+flushSpawnedWork @ react-dom_client.js?v=998df418:11250
+commitRoot @ react-dom_client.js?v=998df418:11081
+commitRootWhenReady @ react-dom_client.js?v=998df418:10512
+performWorkOnRoot @ react-dom_client.js?v=998df418:10457
+performSyncWorkOnRoot @ react-dom_client.js?v=998df418:11635
+flushSyncWorkAcrossRoots_impl @ react-dom_client.js?v=998df418:11536
+processRootScheduleInMicrotask @ react-dom_client.js?v=998df418:11558
+(anonymous) @ react-dom_client.js?v=998df418:11649
+<Map3D>
+exports.jsxDEV @ react_jsx-dev-runtime.js?v=998df418:250
+(anonymous) @ DriveMode.tsx:1102
+react-stack-bottom-frame @ react-dom_client.js?v=998df418:17424
+renderWithHooks @ react-dom_client.js?v=998df418:4206
+updateFunctionComponent @ react-dom_client.js?v=998df418:6619
+beginWork @ react-dom_client.js?v=998df418:7654
+runWithFiberInDEV @ react-dom_client.js?v=998df418:1485
+performUnitOfWork @ react-dom_client.js?v=998df418:10868
+workLoopSync @ react-dom_client.js?v=998df418:10728
+renderRootSync @ react-dom_client.js?v=998df418:10711
+performWorkOnRoot @ react-dom_client.js?v=998df418:10330
+performSyncWorkOnRoot @ react-dom_client.js?v=998df418:11635
+flushSyncWorkAcrossRoots_impl @ react-dom_client.js?v=998df418:11536
+processRootScheduleInMicrotask @ react-dom_client.js?v=998df418:11558
+(anonymous) @ react-dom_client.js?v=998df418:11649
+<DriveMode>
+exports.jsxDEV @ react_jsx-dev-runtime.js?v=998df418:250
+(anonymous) @ MapView.tsx:394
+react-stack-bottom-frame @ react-dom_client.js?v=998df418:17424
+renderWithHooks @ react-dom_client.js?v=998df418:4206
+updateFunctionComponent @ react-dom_client.js?v=998df418:6619
+beginWork @ react-dom_client.js?v=998df418:7654
+runWithFiberInDEV @ react-dom_client.js?v=998df418:1485
+performUnitOfWork @ react-dom_client.js?v=998df418:10868
+workLoopSync @ react-dom_client.js?v=998df418:10728
+renderRootSync @ react-dom_client.js?v=998df418:10711
+performWorkOnRoot @ react-dom_client.js?v=998df418:10330
+performSyncWorkOnRoot @ react-dom_client.js?v=998df418:11635
+flushSyncWorkAcrossRoots_impl @ react-dom_client.js?v=998df418:11536
+processRootScheduleInMicrotask @ react-dom_client.js?v=998df418:11558
+(anonymous) @ react-dom_client.js?v=998df418:11649
+Map3D.tsx:1439 [Map3D] runtime error: layers.3d-buildings.paint.fill-extrusion-ambient-occlusion-intensity: unknown property "fill-extrusion-ambient-occlusion-intensity" vt {error: Error: layers.3d-buildings.paint.fill-extrusion-ambient-occlusion-intensity: unknown property "fill…, type: 'error', target: ds, style: ki}
+(anonymous) @ Map3D.tsx:1439
+fire @ maplibre-gl.js?v=998df418:496
+fire @ maplibre-gl.js?v=998df418:500
+hs @ maplibre-gl.js?v=998df418:3408
+Li @ maplibre-gl.js?v=998df418:18493
+_validate @ maplibre-gl.js?v=998df418:19130
+addLayer @ maplibre-gl.js?v=998df418:18872
+addLayer @ maplibre-gl.js?v=998df418:23040
+add3DBuildings @ Map3D.tsx:1110
+(anonymous) @ Map3D.tsx:1513
+fire @ maplibre-gl.js?v=998df418:496
+_render @ maplibre-gl.js?v=998df418:23207
+(anonymous) @ maplibre-gl.js?v=998df418:23226
+(anonymous) @ maplibre-gl.js?v=998df418:12993
+requestAnimationFrame
+frame @ maplibre-gl.js?v=998df418:12992
+triggerRepaint @ maplibre-gl.js?v=998df418:23223
+_render @ maplibre-gl.js?v=998df418:23209
+(anonymous) @ maplibre-gl.js?v=998df418:23226
+(anonymous) @ maplibre-gl.js?v=998df418:12993
+requestAnimationFrame
+frame @ maplibre-gl.js?v=998df418:12992
+triggerRepaint @ maplibre-gl.js?v=998df418:23223
+_render @ maplibre-gl.js?v=998df418:23209
+(anonymous) @ maplibre-gl.js?v=998df418:23226
+(anonymous) @ maplibre-gl.js?v=998df418:12993
+requestAnimationFrame
+frame @ maplibre-gl.js?v=998df418:12992
+triggerRepaint @ maplibre-gl.js?v=998df418:23223
+_render @ maplibre-gl.js?v=998df418:23209
+(anonymous) @ maplibre-gl.js?v=998df418:23226
+(anonymous) @ maplibre-gl.js?v=998df418:12993
+requestAnimationFrame
+frame @ maplibre-gl.js?v=998df418:12992
+triggerRepaint @ maplibre-gl.js?v=998df418:23223
+_update @ maplibre-gl.js?v=998df418:23186
+(anonymous) @ maplibre-gl.js?v=998df418:22651
+fire @ maplibre-gl.js?v=998df418:496
+fire @ maplibre-gl.js?v=998df418:500
+fire @ maplibre-gl.js?v=998df418:500
+fire @ maplibre-gl.js?v=998df418:500
+_tileLoaded @ maplibre-gl.js?v=998df418:15016
+(anonymous) @ maplibre-gl.js?v=998df418:14957
+o2 @ maplibre-gl.js?v=998df418:35
+Promise.then
+l2 @ maplibre-gl.js?v=998df418:51
+(anonymous) @ maplibre-gl.js?v=998df418:53
+e @ maplibre-gl.js?v=998df418:32
+_loadTile @ maplibre-gl.js?v=998df418:14954
+_addTile @ maplibre-gl.js?v=998df418:15123
+_updateRetainedTiles @ maplibre-gl.js?v=998df418:15103
+update @ maplibre-gl.js?v=998df418:15069
+_updateSources @ maplibre-gl.js?v=998df418:19148
+_render @ maplibre-gl.js?v=998df418:23207
+(anonymous) @ maplibre-gl.js?v=998df418:23226
+(anonymous) @ maplibre-gl.js?v=998df418:12993
+requestAnimationFrame
+frame @ maplibre-gl.js?v=998df418:12992
+triggerRepaint @ maplibre-gl.js?v=998df418:23223
+_update @ maplibre-gl.js?v=998df418:23186
+(anonymous) @ maplibre-gl.js?v=998df418:22642
+fire @ maplibre-gl.js?v=998df418:496
+setTerrain @ maplibre-gl.js?v=998df418:22968
+_load @ maplibre-gl.js?v=998df418:18578
+(anonymous) @ maplibre-gl.js?v=998df418:18565
+Promise.then
+loadJSON @ maplibre-gl.js?v=998df418:18564
+_updateStyle @ maplibre-gl.js?v=998df418:22905
+setStyle @ maplibre-gl.js?v=998df418:22891
+ds @ maplibre-gl.js?v=998df418:22645
+(anonymous) @ Map3D.tsx:1385
+react-stack-bottom-frame @ react-dom_client.js?v=998df418:17478
+runWithFiberInDEV @ react-dom_client.js?v=998df418:1485
+commitHookEffectListMount @ react-dom_client.js?v=998df418:8460
+commitHookPassiveMountEffects @ react-dom_client.js?v=998df418:8518
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9887
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9984
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9984
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9881
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9881
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9984
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9881
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9881
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9881
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9984
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9881
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9984
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9881
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9881
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9984
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9881
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9881
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9899
+flushPassiveEffects @ react-dom_client.js?v=998df418:11302
+flushPendingEffects @ react-dom_client.js?v=998df418:11276
+flushSpawnedWork @ react-dom_client.js?v=998df418:11250
+commitRoot @ react-dom_client.js?v=998df418:11081
+commitRootWhenReady @ react-dom_client.js?v=998df418:10512
+performWorkOnRoot @ react-dom_client.js?v=998df418:10457
+performSyncWorkOnRoot @ react-dom_client.js?v=998df418:11635
+flushSyncWorkAcrossRoots_impl @ react-dom_client.js?v=998df418:11536
+processRootScheduleInMicrotask @ react-dom_client.js?v=998df418:11558
+(anonymous) @ react-dom_client.js?v=998df418:11649
+<Map3D>
+exports.jsxDEV @ react_jsx-dev-runtime.js?v=998df418:250
+(anonymous) @ DriveMode.tsx:1102
+react-stack-bottom-frame @ react-dom_client.js?v=998df418:17424
+renderWithHooks @ react-dom_client.js?v=998df418:4206
+updateFunctionComponent @ react-dom_client.js?v=998df418:6619
+beginWork @ react-dom_client.js?v=998df418:7654
+runWithFiberInDEV @ react-dom_client.js?v=998df418:1485
+performUnitOfWork @ react-dom_client.js?v=998df418:10868
+workLoopSync @ react-dom_client.js?v=998df418:10728
+renderRootSync @ react-dom_client.js?v=998df418:10711
+performWorkOnRoot @ react-dom_client.js?v=998df418:10330
+performSyncWorkOnRoot @ react-dom_client.js?v=998df418:11635
+flushSyncWorkAcrossRoots_impl @ react-dom_client.js?v=998df418:11536
+processRootScheduleInMicrotask @ react-dom_client.js?v=998df418:11558
+(anonymous) @ react-dom_client.js?v=998df418:11649
+<DriveMode>
+exports.jsxDEV @ react_jsx-dev-runtime.js?v=998df418:250
+(anonymous) @ MapView.tsx:394
+react-stack-bottom-frame @ react-dom_client.js?v=998df418:17424
+renderWithHooks @ react-dom_client.js?v=998df418:4206
+updateFunctionComponent @ react-dom_client.js?v=998df418:6619
+beginWork @ react-dom_client.js?v=998df418:7654
+runWithFiberInDEV @ react-dom_client.js?v=998df418:1485
+performUnitOfWork @ react-dom_client.js?v=998df418:10868
+workLoopSync @ react-dom_client.js?v=998df418:10728
+renderRootSync @ react-dom_client.js?v=998df418:10711
+performWorkOnRoot @ react-dom_client.js?v=998df418:10330
+performSyncWorkOnRoot @ react-dom_client.js?v=998df418:11635
+flushSyncWorkAcrossRoots_impl @ react-dom_client.js?v=998df418:11536
+processRootScheduleInMicrotask @ react-dom_client.js?v=998df418:11558
+(anonymous) @ react-dom_client.js?v=998df418:11649
+Map3D.tsx:1439 [Map3D] runtime error: layers.3d-buildings.paint.fill-extrusion-ambient-occlusion-radius: unknown property "fill-extrusion-ambient-occlusion-radius" vt {error: Error: layers.3d-buildings.paint.fill-extrusion-ambient-occlusion-radius: unknown property "fill-ex…, type: 'error', target: ds, style: ki}
+(anonymous) @ Map3D.tsx:1439
+fire @ maplibre-gl.js?v=998df418:496
+fire @ maplibre-gl.js?v=998df418:500
+hs @ maplibre-gl.js?v=998df418:3408
+Li @ maplibre-gl.js?v=998df418:18493
+_validate @ maplibre-gl.js?v=998df418:19130
+addLayer @ maplibre-gl.js?v=998df418:18872
+addLayer @ maplibre-gl.js?v=998df418:23040
+add3DBuildings @ Map3D.tsx:1110
+(anonymous) @ Map3D.tsx:1513
+fire @ maplibre-gl.js?v=998df418:496
+_render @ maplibre-gl.js?v=998df418:23207
+(anonymous) @ maplibre-gl.js?v=998df418:23226
+(anonymous) @ maplibre-gl.js?v=998df418:12993
+requestAnimationFrame
+frame @ maplibre-gl.js?v=998df418:12992
+triggerRepaint @ maplibre-gl.js?v=998df418:23223
+_render @ maplibre-gl.js?v=998df418:23209
+(anonymous) @ maplibre-gl.js?v=998df418:23226
+(anonymous) @ maplibre-gl.js?v=998df418:12993
+requestAnimationFrame
+frame @ maplibre-gl.js?v=998df418:12992
+triggerRepaint @ maplibre-gl.js?v=998df418:23223
+_render @ maplibre-gl.js?v=998df418:23209
+(anonymous) @ maplibre-gl.js?v=998df418:23226
+(anonymous) @ maplibre-gl.js?v=998df418:12993
+requestAnimationFrame
+frame @ maplibre-gl.js?v=998df418:12992
+triggerRepaint @ maplibre-gl.js?v=998df418:23223
+_render @ maplibre-gl.js?v=998df418:23209
+(anonymous) @ maplibre-gl.js?v=998df418:23226
+(anonymous) @ maplibre-gl.js?v=998df418:12993
+requestAnimationFrame
+frame @ maplibre-gl.js?v=998df418:12992
+triggerRepaint @ maplibre-gl.js?v=998df418:23223
+_update @ maplibre-gl.js?v=998df418:23186
+(anonymous) @ maplibre-gl.js?v=998df418:22651
+fire @ maplibre-gl.js?v=998df418:496
+fire @ maplibre-gl.js?v=998df418:500
+fire @ maplibre-gl.js?v=998df418:500
+fire @ maplibre-gl.js?v=998df418:500
+_tileLoaded @ maplibre-gl.js?v=998df418:15016
+(anonymous) @ maplibre-gl.js?v=998df418:14957
+o2 @ maplibre-gl.js?v=998df418:35
+Promise.then
+l2 @ maplibre-gl.js?v=998df418:51
+(anonymous) @ maplibre-gl.js?v=998df418:53
+e @ maplibre-gl.js?v=998df418:32
+_loadTile @ maplibre-gl.js?v=998df418:14954
+_addTile @ maplibre-gl.js?v=998df418:15123
+_updateRetainedTiles @ maplibre-gl.js?v=998df418:15103
+update @ maplibre-gl.js?v=998df418:15069
+_updateSources @ maplibre-gl.js?v=998df418:19148
+_render @ maplibre-gl.js?v=998df418:23207
+(anonymous) @ maplibre-gl.js?v=998df418:23226
+(anonymous) @ maplibre-gl.js?v=998df418:12993
+requestAnimationFrame
+frame @ maplibre-gl.js?v=998df418:12992
+triggerRepaint @ maplibre-gl.js?v=998df418:23223
+_update @ maplibre-gl.js?v=998df418:23186
+(anonymous) @ maplibre-gl.js?v=998df418:22642
+fire @ maplibre-gl.js?v=998df418:496
+setTerrain @ maplibre-gl.js?v=998df418:22968
+_load @ maplibre-gl.js?v=998df418:18578
+(anonymous) @ maplibre-gl.js?v=998df418:18565
+Promise.then
+loadJSON @ maplibre-gl.js?v=998df418:18564
+_updateStyle @ maplibre-gl.js?v=998df418:22905
+setStyle @ maplibre-gl.js?v=998df418:22891
+ds @ maplibre-gl.js?v=998df418:22645
+(anonymous) @ Map3D.tsx:1385
+react-stack-bottom-frame @ react-dom_client.js?v=998df418:17478
+runWithFiberInDEV @ react-dom_client.js?v=998df418:1485
+commitHookEffectListMount @ react-dom_client.js?v=998df418:8460
+commitHookPassiveMountEffects @ react-dom_client.js?v=998df418:8518
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9887
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9984
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9984
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9881
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9881
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9984
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9881
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9881
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9881
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9984
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9881
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9984
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9881
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9881
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9984
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9881
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9881
+recursivelyTraversePassiveMountEffects @ react-dom_client.js?v=998df418:9868
+commitPassiveMountOnFiber @ react-dom_client.js?v=998df418:9899
+flushPassiveEffects @ react-dom_client.js?v=998df418:11302
+flushPendingEffects @ react-dom_client.js?v=998df418:11276
+flushSpawnedWork @ react-dom_client.js?v=998df418:11250
+commitRoot @ react-dom_client.js?v=998df418:11081
+commitRootWhenReady @ react-dom_client.js?v=998df418:10512
+performWorkOnRoot @ react-dom_client.js?v=998df418:10457
+performSyncWorkOnRoot @ react-dom_client.js?v=998df418:11635
+flushSyncWorkAcrossRoots_impl @ react-dom_client.js?v=998df418:11536
+processRootScheduleInMicrotask @ react-dom_client.js?v=998df418:11558
+(anonymous) @ react-dom_client.js?v=998df418:11649
+<Map3D>
+exports.jsxDEV @ react_jsx-dev-runtime.js?v=998df418:250
+(anonymous) @ DriveMode.tsx:1102
+react-stack-bottom-frame @ react-dom_client.js?v=998df418:17424
+renderWithHooks @ react-dom_client.js?v=998df418:4206
+updateFunctionComponent @ react-dom_client.js?v=998df418:6619
+beginWork @ react-dom_client.js?v=998df418:7654
+runWithFiberInDEV @ react-dom_client.js?v=998df418:1485
+performUnitOfWork @ react-dom_client.js?v=998df418:10868
+workLoopSync @ react-dom_client.js?v=998df418:10728
+renderRootSync @ react-dom_client.js?v=998df418:10711
+performWorkOnRoot @ react-dom_client.js?v=998df418:10330
+performSyncWorkOnRoot @ react-dom_client.js?v=998df418:11635
+flushSyncWorkAcrossRoots_impl @ react-dom_client.js?v=998df418:11536
+processRootScheduleInMicrotask @ react-dom_client.js?v=998df418:11558
+(anonymous) @ react-dom_client.js?v=998df418:11649
+<DriveMode>
+exports.jsxDEV @ react_jsx-dev-runtime.js?v=998df418:250
+(anonymous) @ MapView.tsx:394
+react-stack-bottom-frame @ react-dom_client.js?v=998df418:17424
+renderWithHooks @ react-dom_client.js?v=998df418:4206
+updateFunctionComponent @ react-dom_client.js?v=998df418:6619
+beginWork @ react-dom_client.js?v=998df418:7654
+runWithFiberInDEV @ react-dom_client.js?v=998df418:1485
+performUnitOfWork @ react-dom_client.js?v=998df418:10868
+workLoopSync @ react-dom_client.js?v=998df418:10728
+renderRootSync @ react-dom_client.js?v=998df418:10711
+performWorkOnRoot @ react-dom_client.js?v=998df418:10330
+performSyncWorkOnRoot @ react-dom_client.js?v=998df418:11635
+flushSyncWorkAcrossRoots_impl @ react-dom_client.js?v=998df418:11536
+processRootScheduleInMicrotask @ react-dom_client.js?v=998df418:11558
+(anonymous) @ react-dom_client.js?v=998df418:11649
+Map3D.tsx:1457 [Map3D] first idle — canvas 811x520, tiles loaded: 51, zoom 15.33
