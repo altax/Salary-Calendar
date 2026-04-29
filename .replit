@@ -55,3 +55,8 @@ externalPort = 8081
 [[ports]]
 localPort = 19370
 externalPort = 80
+
+[userenv]
+
+[userenv.shared]
+VITE_MAPILLARY_TOKEN = "MLY|26582102394745405|d4f810fb09a56d2322b40321a8a53d9a"
