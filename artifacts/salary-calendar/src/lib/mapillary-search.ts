@@ -14,6 +14,12 @@
 import { VectorTile } from "@mapbox/vector-tile";
 import Pbf from "pbf";
 
+// All Mapillary endpoints are routed through same-origin proxies declared
+// in `vite.config.ts`. Direct calls to *.mapillary.com fail with
+// ERR_NAME_NOT_RESOLVED on many Russian ISPs.
+const TILES_BASE = "/_tiles/mapillary";
+const GRAPH_BASE = "/_api/mapillary";
+
 export type FoundImage = {
   id: string;
   lat: number;
@@ -75,7 +81,7 @@ async function findViaGraph(
   const dLat = radiusMeters / 111320;
   const dLng = radiusMeters / (111320 * Math.cos((lat * Math.PI) / 180));
   const bbox = `${lng - dLng},${lat - dLat},${lng + dLng},${lat + dLat}`;
-  const url = `https://graph.mapillary.com/images?fields=id,computed_geometry,geometry,is_pano&bbox=${bbox}&limit=500`;
+  const url = `${GRAPH_BASE}/images?fields=id,computed_geometry,geometry,is_pano&bbox=${bbox}&limit=500`;
   const res = await fetch(url, { headers: { Authorization: `OAuth ${token}` } });
   if (!res.ok) return null;
   const json = (await res.json()) as {
@@ -119,7 +125,7 @@ async function findViaTiles(
     for (let dy = -1; dy <= 1; dy++) {
       const tx = cx + dx;
       const ty = cy + dy;
-      const url = `https://tiles.mapillary.com/maps/vtp/mly1_public/2/${Z}/${tx}/${ty}?access_token=${encodeURIComponent(token)}`;
+      const url = `${TILES_BASE}/maps/vtp/mly1_public/2/${Z}/${tx}/${ty}?access_token=${encodeURIComponent(token)}`;
       reqs.push(
         fetch(url).then(async (r) =>
           r.ok ? { tx, ty, buf: await r.arrayBuffer() } : { tx, ty, buf: null },
@@ -187,7 +193,7 @@ async function findPanoViaTiles(
     for (let dy = -searchTilesRadius; dy <= searchTilesRadius; dy++) {
       const tx = cx + dx;
       const ty = cy + dy;
-      const url = `https://tiles.mapillary.com/maps/vtp/mly1_public/2/${Z}/${tx}/${ty}?access_token=${encodeURIComponent(token)}`;
+      const url = `${TILES_BASE}/maps/vtp/mly1_public/2/${Z}/${tx}/${ty}?access_token=${encodeURIComponent(token)}`;
       reqs.push(
         fetch(url).then(async (r) =>
           r.ok ? { tx, ty, buf: await r.arrayBuffer() } : { tx, ty, buf: null },

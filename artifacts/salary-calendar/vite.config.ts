@@ -113,6 +113,103 @@ function osmTileProxyPlugin(): Plugin {
   };
 }
 
+// Proxy Mapillary vector tiles via the same-origin Replit domain. Direct
+// requests to `tiles.mapillary.com` fail with ERR_NAME_NOT_RESOLVED on
+// many Russian ISPs (the host sits behind Cloudflare which is partially
+// blocked there). Same trick as the openFreeMap proxy above.
+//
+// Path scheme: `/_tiles/mapillary/{rest}` → `https://tiles.mapillary.com/{rest}`.
+function mapillaryTileProxyPlugin(): Plugin {
+  const UPSTREAM = "https://tiles.mapillary.com";
+  const PREFIX = "/_tiles/mapillary";
+
+  const middleware: Connect.NextHandleFunction = async (req, res, next) => {
+    if (!req.url || !req.url.startsWith(PREFIX)) return next();
+    const upstreamUrl = UPSTREAM + req.url.slice(PREFIX.length);
+    try {
+      const upstreamRes = await fetch(upstreamUrl, {
+        headers: {
+          "user-agent": "salary-calendar-mapillary-proxy/1.0",
+          "accept-encoding": "identity",
+        },
+      });
+      res.statusCode = upstreamRes.status;
+      const ct = upstreamRes.headers.get("content-type");
+      if (ct) res.setHeader("content-type", ct);
+      // Tiles are content-addressed, cache hard.
+      res.setHeader("cache-control", "public, max-age=86400");
+      res.setHeader("access-control-allow-origin", "*");
+      const buf = Buffer.from(await upstreamRes.arrayBuffer());
+      res.end(buf);
+    } catch (err) {
+      res.statusCode = 502;
+      res.setHeader("content-type", "text/plain");
+      res.end(
+        `Mapillary tile proxy error: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  };
+
+  return {
+    name: "mapillary-tile-proxy",
+    configureServer(server) {
+      server.middlewares.use(middleware);
+    },
+    configurePreviewServer(server) {
+      server.middlewares.use(middleware);
+    },
+  };
+}
+
+// Proxy the Mapillary Graph API the same way. Used as a fallback path
+// for the street-view image search; also handy if we later add features
+// that depend on Graph endpoints. Path: `/_api/mapillary/{rest}` →
+// `https://graph.mapillary.com/{rest}`.
+function mapillaryGraphProxyPlugin(): Plugin {
+  const UPSTREAM = "https://graph.mapillary.com";
+  const PREFIX = "/_api/mapillary";
+
+  const middleware: Connect.NextHandleFunction = async (req, res, next) => {
+    if (!req.url || !req.url.startsWith(PREFIX)) return next();
+    const upstreamUrl = UPSTREAM + req.url.slice(PREFIX.length);
+    const incomingAuth = req.headers["authorization"];
+    try {
+      const upstreamRes = await fetch(upstreamUrl, {
+        headers: {
+          "user-agent": "salary-calendar-mapillary-proxy/1.0",
+          "accept-encoding": "identity",
+          ...(typeof incomingAuth === "string"
+            ? { authorization: incomingAuth }
+            : {}),
+        },
+      });
+      res.statusCode = upstreamRes.status;
+      const ct = upstreamRes.headers.get("content-type");
+      if (ct) res.setHeader("content-type", ct);
+      res.setHeader("cache-control", "no-cache");
+      res.setHeader("access-control-allow-origin", "*");
+      const buf = Buffer.from(await upstreamRes.arrayBuffer());
+      res.end(buf);
+    } catch (err) {
+      res.statusCode = 502;
+      res.setHeader("content-type", "text/plain");
+      res.end(
+        `Mapillary graph proxy error: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  };
+
+  return {
+    name: "mapillary-graph-proxy",
+    configureServer(server) {
+      server.middlewares.use(middleware);
+    },
+    configurePreviewServer(server) {
+      server.middlewares.use(middleware);
+    },
+  };
+}
+
 const rawPort = process.env.PORT;
 
 if (!rawPort) {
@@ -143,6 +240,8 @@ export default defineConfig({
     runtimeErrorOverlay(),
     openFreeMapProxyPlugin(),
     osmTileProxyPlugin(),
+    mapillaryTileProxyPlugin(),
+    mapillaryGraphProxyPlugin(),
     ...(process.env.NODE_ENV !== "production" &&
     process.env.REPL_ID !== undefined
       ? [
