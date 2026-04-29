@@ -210,6 +210,201 @@ function mapillaryGraphProxyPlugin(): Plugin {
   };
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// Yandex panorama proxies.
+//
+// The browser cannot embed `www.mapillary.com` (DNS-blocked at most
+// Russian ISPs) and the official Yandex map widget hits per-IP rate
+// limits on its internal panorama lookup (`api-maps.yandex.ru` returns
+// 429 when many users share an upstream NAT). To dodge both problems we
+// build our own viewer and route every Yandex request through this
+// origin: the browser only ever talks to us; Yandex sees a single
+// server-side IP that we cache aggressively.
+//
+//   GET /_api/yandex-pano?ll=lng,lat
+//   GET /_api/yandex-pano?oid=<panorama-id>
+//       → https://api-maps.yandex.ru/services/panoramas/1.x/?…
+//       Returns the panorama metadata JSON (image id, tile zooms,
+//       neighbouring panoramas, historical versions).
+//       Server-side LRU-ish cache (200 entries, 24 h TTL) so repeated
+//       lookups for the same point/oid are free.
+//
+//   GET /_tiles/yandex-pano/{imageId}/{z}.{x}.{y}
+//       → https://pano.maps.yandex.net/{imageId}/{z}.{x}.{y}
+//       Equirectangular tile JPEGs (256×256). Content-addressed by
+//       imageId, so we set strong long-lived cache headers.
+// ──────────────────────────────────────────────────────────────────────────
+
+type CacheEntry = { value: { status: number; body: Buffer; ct: string }; expiresAt: number };
+
+function makeLruCache(maxEntries: number) {
+  const map = new Map<string, CacheEntry>();
+  return {
+    get(key: string): CacheEntry["value"] | null {
+      const hit = map.get(key);
+      if (!hit) return null;
+      if (hit.expiresAt < Date.now()) {
+        map.delete(key);
+        return null;
+      }
+      // Re-insert to mark as most-recently-used.
+      map.delete(key);
+      map.set(key, hit);
+      return hit.value;
+    },
+    set(key: string, value: CacheEntry["value"], ttlMs: number) {
+      if (map.has(key)) map.delete(key);
+      map.set(key, { value, expiresAt: Date.now() + ttlMs });
+      while (map.size > maxEntries) {
+        const oldest = map.keys().next().value;
+        if (oldest === undefined) break;
+        map.delete(oldest);
+      }
+    },
+  };
+}
+
+function yandexPanoApiProxyPlugin(): Plugin {
+  const UPSTREAM = "https://api-maps.yandex.ru/services/panoramas/1.x/";
+  const PREFIX = "/_api/yandex-pano";
+  const cache = makeLruCache(200);
+  // Yandex panoramas don't change often; 24h cache is fine and
+  // dramatically reduces 429s. The dataset version updates only when the
+  // city is rephotographed.
+  const TTL_MS = 24 * 60 * 60 * 1000;
+
+  const middleware: Connect.NextHandleFunction = async (req, res, next) => {
+    if (!req.url || !req.url.startsWith(PREFIX)) return next();
+    const qIdx = req.url.indexOf("?");
+    const incomingQs = qIdx >= 0 ? req.url.slice(qIdx + 1) : "";
+    const incoming = new URLSearchParams(incomingQs);
+    const ll = incoming.get("ll");
+    const oid = incoming.get("oid");
+    if (!ll && !oid) {
+      res.statusCode = 400;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ error: "ll or oid required" }));
+      return;
+    }
+    const cacheKey = oid ? `oid:${oid}` : `ll:${ll}`;
+    const cached = cache.get(cacheKey);
+    if (cached) {
+      res.statusCode = cached.status;
+      res.setHeader("content-type", cached.ct);
+      res.setHeader("cache-control", "public, max-age=3600");
+      res.setHeader("x-cache", "HIT");
+      res.setHeader("access-control-allow-origin", "*");
+      res.end(cached.body);
+      return;
+    }
+
+    const upstreamParams = new URLSearchParams({
+      l: "stv",
+      lang: "ru_RU",
+      origin: "userAction",
+      provider: "streetview",
+    });
+    if (oid) upstreamParams.set("oid", oid);
+    if (ll) upstreamParams.set("ll", ll);
+    const upstreamUrl = `${UPSTREAM}?${upstreamParams.toString()}`;
+    try {
+      const upstreamRes = await fetch(upstreamUrl, {
+        headers: {
+          "user-agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          referer: "https://yandex.ru/maps/",
+          accept: "application/json,*/*",
+          "accept-encoding": "identity",
+        },
+      });
+      const buf = Buffer.from(await upstreamRes.arrayBuffer());
+      const ct = upstreamRes.headers.get("content-type") ?? "application/json";
+      // Only cache successful payloads. 429 should NOT be cached.
+      if (upstreamRes.ok) {
+        cache.set(cacheKey, { status: upstreamRes.status, body: buf, ct }, TTL_MS);
+      }
+      res.statusCode = upstreamRes.status;
+      res.setHeader("content-type", ct);
+      res.setHeader(
+        "cache-control",
+        upstreamRes.ok ? "public, max-age=3600" : "no-store",
+      );
+      res.setHeader("x-cache", "MISS");
+      res.setHeader("access-control-allow-origin", "*");
+      res.end(buf);
+    } catch (err) {
+      res.statusCode = 502;
+      res.setHeader("content-type", "text/plain");
+      res.end(
+        `Yandex panorama API proxy error: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  };
+
+  return {
+    name: "yandex-pano-api-proxy",
+    configureServer(server) {
+      server.middlewares.use(middleware);
+    },
+    configurePreviewServer(server) {
+      server.middlewares.use(middleware);
+    },
+  };
+}
+
+function yandexPanoTileProxyPlugin(): Plugin {
+  const UPSTREAM = "https://pano.maps.yandex.net";
+  const PREFIX = "/_tiles/yandex-pano";
+
+  const middleware: Connect.NextHandleFunction = async (req, res, next) => {
+    if (!req.url || !req.url.startsWith(PREFIX)) return next();
+    // Strip query string from URL when computing upstream path. Tile URLs
+    // never carry meaningful query params upstream, but Vite/devtools may
+    // tack on `?t=` for cache-busting during dev.
+    const path = req.url.slice(PREFIX.length).split("?")[0];
+    if (!/^\/[A-Za-z0-9_-]+\/\d+\.\d+\.\d+$/.test(path)) {
+      res.statusCode = 400;
+      res.setHeader("content-type", "text/plain");
+      res.end("bad pano tile path");
+      return;
+    }
+    const upstreamUrl = UPSTREAM + path;
+    try {
+      const upstreamRes = await fetch(upstreamUrl, {
+        headers: {
+          "user-agent": "Mozilla/5.0 salary-calendar-pano-proxy/1.0",
+          referer: "https://yandex.ru/maps/",
+          "accept-encoding": "identity",
+        },
+      });
+      res.statusCode = upstreamRes.status;
+      const ct = upstreamRes.headers.get("content-type") ?? "image/jpeg";
+      res.setHeader("content-type", ct);
+      // Tiles are immutable per imageId. Cache hard.
+      res.setHeader("cache-control", "public, max-age=604800, immutable");
+      res.setHeader("access-control-allow-origin", "*");
+      const buf = Buffer.from(await upstreamRes.arrayBuffer());
+      res.end(buf);
+    } catch (err) {
+      res.statusCode = 502;
+      res.setHeader("content-type", "text/plain");
+      res.end(
+        `Yandex pano tile proxy error: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  };
+
+  return {
+    name: "yandex-pano-tile-proxy",
+    configureServer(server) {
+      server.middlewares.use(middleware);
+    },
+    configurePreviewServer(server) {
+      server.middlewares.use(middleware);
+    },
+  };
+}
+
 const rawPort = process.env.PORT;
 
 if (!rawPort) {
@@ -242,6 +437,8 @@ export default defineConfig({
     osmTileProxyPlugin(),
     mapillaryTileProxyPlugin(),
     mapillaryGraphProxyPlugin(),
+    yandexPanoApiProxyPlugin(),
+    yandexPanoTileProxyPlugin(),
     ...(process.env.NODE_ENV !== "production" &&
     process.env.REPL_ID !== undefined
       ? [
