@@ -25,7 +25,10 @@ function proxyOrigin(): string {
   return "";
 }
 
-const OPENFREEMAP_STYLE_URL = `${proxyOrigin()}${OPENFREEMAP_PROXY_PREFIX}/styles/liberty`;
+// `positron` is a simpler, well-tested OpenFreeMap style; "liberty" had
+// expression evaluation issues with recent tile versions that left the map
+// blank. Switch back to liberty later if positron proves stable.
+const OPENFREEMAP_STYLE_URL = `${proxyOrigin()}${OPENFREEMAP_PROXY_PREFIX}/styles/positron`;
 
 function rewriteOpenFreeMapUrl(url: string): string {
   // MapLibre loads tiles inside a Web Worker which cannot resolve relative
@@ -131,7 +134,6 @@ function add3DBuildings(map: MLMap, theme: "dark" | "light") {
     }
   }
   if (!source) {
-    // fall back to common openmaptiles defaults
     if (map.getSource("openmaptiles")) {
       source = "openmaptiles";
       sourceLayer = "building";
@@ -151,6 +153,28 @@ function add3DBuildings(map: MLMap, theme: "dark" | "light") {
     }
   }
 
+  // Defensive height expression: openmaptiles building features may have
+  // null `render_height` / `height` properties. Both `coalesce` and
+  // direct `get` can yield null, which crashes MapLibre's interpolation
+  // (`Expected value to be of type number, but found null`). We use
+  // `case` + `has` + `to-number` (with fallback) to guarantee a number.
+  const heightExpr: any = [
+    "case",
+    ["has", "render_height"],
+    ["to-number", ["get", "render_height"], 8],
+    ["has", "height"],
+    ["to-number", ["get", "height"], 8],
+    8,
+  ];
+  const baseExpr: any = [
+    "case",
+    ["has", "render_min_height"],
+    ["to-number", ["get", "render_min_height"], 0],
+    ["has", "min_height"],
+    ["to-number", ["get", "min_height"], 0],
+    0,
+  ];
+
   map.addLayer(
     {
       id: "3d-buildings",
@@ -162,7 +186,7 @@ function add3DBuildings(map: MLMap, theme: "dark" | "light") {
         "fill-extrusion-color": [
           "interpolate",
           ["linear"],
-          ["coalesce", ["get", "render_height"], ["get", "height"], 8],
+          heightExpr,
           0,
           buildingColor,
           50,
@@ -170,18 +194,8 @@ function add3DBuildings(map: MLMap, theme: "dark" | "light") {
           150,
           buildingTall,
         ],
-        "fill-extrusion-height": [
-          "coalesce",
-          ["get", "render_height"],
-          ["get", "height"],
-          8,
-        ],
-        "fill-extrusion-base": [
-          "coalesce",
-          ["get", "render_min_height"],
-          ["get", "min_height"],
-          0,
-        ],
+        "fill-extrusion-height": heightExpr,
+        "fill-extrusion-base": baseExpr,
         "fill-extrusion-opacity": 0.92,
         "fill-extrusion-vertical-gradient": true,
       },
@@ -334,10 +348,14 @@ export default function Map3D({
       setLoading(false);
 
       try {
-        applyDarkTheme(map, themeRef.current);
+        // NOTE: applyDarkTheme is intentionally disabled — it caused style
+        // expression evaluation errors on some tile versions, leaving the map
+        // blank. We keep the vanilla OpenFreeMap "liberty" colors for now and
+        // only add 3D building extrusions on top.
+        // applyDarkTheme(map, themeRef.current);
         add3DBuildings(map, themeRef.current);
       } catch (err) {
-        console.warn("[Map3D] theme/extrusion apply failed", err);
+        console.warn("[Map3D] extrusion apply failed", err);
       }
 
       // Empty sources for routes
