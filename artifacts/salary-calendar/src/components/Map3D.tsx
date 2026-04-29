@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import maplibregl, {
   Map as MLMap,
   Marker as MLMarker,
-  type StyleSpecification,
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { cn } from "@/lib/utils";
@@ -12,7 +11,6 @@ import type { GeoPosition } from "@/lib/geolocation";
 
 const SPB_CENTER: [number, number] = [30.3351, 59.9343];
 
-const OPENFREEMAP_TILES = "https://tiles.openfreemap.org/planet/20250604_001001_pt/{z}/{x}/{y}.pbf";
 const OPENFREEMAP_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
 
 function jobColor(job: ResolvedJob | undefined, theme: "dark" | "light"): string {
@@ -21,7 +19,24 @@ function jobColor(job: ResolvedJob | undefined, theme: "dark" | "light"): string
   return theme === "dark" ? "#888" : "#666";
 }
 
-function buildDarkStyle(baseStyle: StyleSpecification, theme: "dark" | "light"): StyleSpecification {
+function detectWebGL(): { ok: boolean; reason?: string } {
+  try {
+    const probe = document.createElement("canvas");
+    const gl =
+      (probe.getContext("webgl2") as WebGL2RenderingContext | null) ||
+      (probe.getContext("webgl") as WebGLRenderingContext | null) ||
+      (probe.getContext("experimental-webgl") as WebGLRenderingContext | null);
+    if (!gl) return { ok: false, reason: "Контекст WebGL не создан." };
+    return { ok: true };
+  } catch (e) {
+    return {
+      ok: false,
+      reason: e instanceof Error ? e.message : "Неизвестная ошибка WebGL.",
+    };
+  }
+}
+
+function applyDarkTheme(map: MLMap, theme: "dark" | "light") {
   const isDark = theme === "dark";
   const water = isDark ? "#0a0d12" : "#cde2ff";
   const land = isDark ? "#101216" : "#f3f4f7";
@@ -30,75 +45,123 @@ function buildDarkStyle(baseStyle: StyleSpecification, theme: "dark" | "light"):
   const labelColor = isDark ? "#cfd3da" : "#1c1c20";
   const labelHalo = isDark ? "#000000" : "#ffffff";
   const buildingColor = isDark ? "#1c1f25" : "#dde0e6";
-  const buildingTop = isDark ? "#272b33" : "#cdd1d8";
 
-  const style = JSON.parse(JSON.stringify(baseStyle)) as StyleSpecification;
+  const style = map.getStyle();
+  if (!style?.layers) return;
 
   for (const layer of style.layers as any[]) {
-    if (layer.type === "background") {
-      layer.paint = { ...(layer.paint || {}), "background-color": land };
-    }
-    if (layer.id?.includes("water")) {
-      if (layer.type === "fill") {
-        layer.paint = { ...(layer.paint || {}), "fill-color": water };
+    const id: string = layer.id ?? "";
+    try {
+      if (layer.type === "background") {
+        map.setPaintProperty(id, "background-color", land);
       }
-    }
-    if (layer.id?.includes("landuse") || layer.id?.includes("park") || layer.id?.includes("landcover")) {
-      if (layer.type === "fill") {
-        const c = isDark ? "#15171c" : "#e7eae6";
-        layer.paint = { ...(layer.paint || {}), "fill-color": c, "fill-opacity": 0.6 };
+      if (id.includes("water") && layer.type === "fill") {
+        map.setPaintProperty(id, "fill-color", water);
       }
-    }
-    if (layer.id?.includes("road") || layer.id?.includes("street") || layer.id?.includes("highway")) {
-      if (layer.type === "line") {
-        const isCasing = layer.id.includes("casing") || layer.id.includes("outline");
-        layer.paint = {
-          ...(layer.paint || {}),
-          "line-color": isCasing ? roadCasing : road,
-        };
+      if (
+        (id.includes("landuse") || id.includes("park") || id.includes("landcover")) &&
+        layer.type === "fill"
+      ) {
+        map.setPaintProperty(id, "fill-color", isDark ? "#15171c" : "#e7eae6");
+        map.setPaintProperty(id, "fill-opacity", 0.6);
       }
+      if (
+        (id.includes("road") || id.includes("street") || id.includes("highway")) &&
+        layer.type === "line"
+      ) {
+        const isCasing = id.includes("casing") || id.includes("outline");
+        map.setPaintProperty(id, "line-color", isCasing ? roadCasing : road);
+      }
+      if (layer.type === "symbol") {
+        map.setPaintProperty(id, "text-color", labelColor);
+        map.setPaintProperty(id, "text-halo-color", labelHalo);
+        map.setPaintProperty(id, "text-halo-width", 1.4);
+      }
+      if (id.includes("building") && layer.type === "fill") {
+        map.setPaintProperty(id, "fill-color", buildingColor);
+      }
+    } catch {
+      // ignore layers that don't support a property
     }
-    if (layer.type === "symbol") {
-      layer.paint = {
-        ...(layer.paint || {}),
-        "text-color": labelColor,
-        "text-halo-color": labelHalo,
-        "text-halo-width": 1.4,
-      };
+  }
+}
+
+function add3DBuildings(map: MLMap, theme: "dark" | "light") {
+  if (map.getLayer("3d-buildings")) return;
+  const isDark = theme === "dark";
+  const buildingColor = isDark ? "#1c1f25" : "#dde0e6";
+  const buildingTop = isDark ? "#272b33" : "#cdd1d8";
+  const buildingTall = isDark ? "#3a3f48" : "#b9bdc4";
+
+  const style = map.getStyle();
+  // Find the source-layer name used by the existing buildings layer (some styles call it "building", some other names)
+  let sourceLayer: string | null = null;
+  let source: string | null = null;
+  for (const l of (style?.layers ?? []) as any[]) {
+    if (l["source-layer"] === "building" && l.source) {
+      sourceLayer = "building";
+      source = l.source;
+      break;
     }
-    if (layer.id?.includes("building") && layer.type === "fill") {
-      layer.paint = { ...(layer.paint || {}), "fill-color": buildingColor };
+  }
+  if (!source) {
+    // fall back to common openmaptiles defaults
+    if (map.getSource("openmaptiles")) {
+      source = "openmaptiles";
+      sourceLayer = "building";
+    }
+  }
+  if (!source || !sourceLayer) {
+    console.warn("[Map3D] no building source-layer found in style; skipping 3D extrusion");
+    return;
+  }
+
+  // Find the first symbol (label) layer so extrusions sit beneath labels
+  let beforeId: string | undefined;
+  for (const l of (style?.layers ?? []) as any[]) {
+    if (l.type === "symbol") {
+      beforeId = l.id;
+      break;
     }
   }
 
-  // Append the 3D extrusion layer at the end so it sits above everything
-  // except labels.
-  (style.layers as any[]).push({
-    id: "3d-buildings",
-    source: "openmaptiles",
-    "source-layer": "building",
-    type: "fill-extrusion",
-    minzoom: 14,
-    paint: {
-      "fill-extrusion-color": [
-        "interpolate",
-        ["linear"],
-        ["coalesce", ["get", "render_height"], ["get", "height"], 8],
-        0,
-        buildingColor,
-        50,
-        buildingTop,
-        150,
-        isDark ? "#3a3f48" : "#b9bdc4",
-      ],
-      "fill-extrusion-height": ["coalesce", ["get", "render_height"], ["get", "height"], 8],
-      "fill-extrusion-base": ["coalesce", ["get", "render_min_height"], ["get", "min_height"], 0],
-      "fill-extrusion-opacity": 0.92,
-      "fill-extrusion-vertical-gradient": true,
-    },
-  });
-
-  return style;
+  map.addLayer(
+    {
+      id: "3d-buildings",
+      source,
+      "source-layer": sourceLayer,
+      type: "fill-extrusion",
+      minzoom: 14,
+      paint: {
+        "fill-extrusion-color": [
+          "interpolate",
+          ["linear"],
+          ["coalesce", ["get", "render_height"], ["get", "height"], 8],
+          0,
+          buildingColor,
+          50,
+          buildingTop,
+          150,
+          buildingTall,
+        ],
+        "fill-extrusion-height": [
+          "coalesce",
+          ["get", "render_height"],
+          ["get", "height"],
+          8,
+        ],
+        "fill-extrusion-base": [
+          "coalesce",
+          ["get", "render_min_height"],
+          ["get", "min_height"],
+          0,
+        ],
+        "fill-extrusion-opacity": 0.92,
+        "fill-extrusion-vertical-gradient": true,
+      },
+    } as any,
+    beforeId,
+  );
 }
 
 export type Map3DProps = {
@@ -162,6 +225,7 @@ export default function Map3D({
   const themeRef = useRef(theme);
   themeRef.current = theme;
   const [initError, setInitError] = useState<string | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
 
   const jobsById = useMemo(() => {
     const map = new Map<string, ResolvedJob>();
@@ -183,47 +247,70 @@ export default function Map3D({
     if (!containerRef.current) return;
     let cancelled = false;
 
-    (async () => {
+    console.log("[Map3D] init start");
+    setLoading(true);
+
+    const webgl = detectWebGL();
+    if (!webgl.ok) {
+      console.warn("[Map3D] webgl unavailable:", webgl.reason);
+      setInitError(
+        `Этому браузеру недоступен WebGL (${webgl.reason ?? ""}). 3D-карта не запустится. Вернись в обычный режим кнопкой 3D слева.`,
+      );
+      setLoading(false);
+      return;
+    }
+
+    let map: MLMap;
+    try {
+      map = new maplibregl.Map({
+        container: containerRef.current,
+        style: OPENFREEMAP_STYLE_URL,
+        center: depot ? [depot.lng, depot.lat] : SPB_CENTER,
+        zoom: initialZoom,
+        pitch: 60,
+        bearing: -17,
+        canvasContextAttributes: { antialias: true },
+        attributionControl: { compact: true },
+        maxPitch: 75,
+      });
+    } catch (err) {
+      console.error("[Map3D] map ctor failed", err);
+      setInitError(
+        err instanceof Error
+          ? `Не удалось создать 3D-карту: ${err.message}`
+          : "Не удалось создать 3D-карту.",
+      );
+      setLoading(false);
+      return;
+    }
+
+    mapRef.current = map;
+
+    map.on("error", (e: any) => {
+      const msg = e?.error?.message ?? String(e?.error ?? e);
+      console.warn("[Map3D] runtime error:", msg, e);
+    });
+
+    map.addControl(
+      new maplibregl.NavigationControl({ visualizePitch: true }),
+      "top-right",
+    );
+
+    map.on("load", () => {
+      if (cancelled) return;
+      console.log("[Map3D] map loaded");
+      isLoadedRef.current = true;
+      setLoading(false);
+
       try {
-        // Detect WebGL2 support before attempting to create the map; without
-        // it MapLibre throws an unhandled exception that breaks the page.
-        const probe = document.createElement("canvas");
-        const gl = probe.getContext("webgl2") || probe.getContext("webgl");
-        if (!gl) {
-          setInitError("Этому браузеру недоступен WebGL — 3D-карта не запустится. Попробуй вернуться в обычный режим картой выше слева.");
-          return;
-        }
+        applyDarkTheme(map, themeRef.current);
+        add3DBuildings(map, themeRef.current);
+      } catch (err) {
+        console.warn("[Map3D] theme/extrusion apply failed", err);
+      }
 
-        const styleRes = await fetch(OPENFREEMAP_STYLE_URL);
-        if (!styleRes.ok) {
-          setInitError("Не удалось загрузить стиль карты OpenFreeMap.");
-          return;
-        }
-        const baseStyle = (await styleRes.json()) as StyleSpecification;
-        if (cancelled || !containerRef.current) return;
-        const styled = buildDarkStyle(baseStyle, themeRef.current);
-
-        const map = new maplibregl.Map({
-          container: containerRef.current,
-          style: styled,
-          center: depot ? [depot.lng, depot.lat] : SPB_CENTER,
-          zoom: initialZoom,
-          pitch: 60,
-          bearing: -17,
-          canvasContextAttributes: { antialias: true },
-          attributionControl: { compact: true },
-          maxPitch: 75,
-        });
-
-        mapRef.current = map;
-
-      map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
-
-      map.on("load", () => {
-        if (cancelled) return;
-        isLoadedRef.current = true;
-
-        // Empty sources for routes
+      // Empty sources for routes
+      try {
         map.addSource("pending-route", {
           type: "geojson",
           data: { type: "FeatureCollection", features: [] },
@@ -271,27 +358,16 @@ export default function Map3D({
             "line-opacity": 0.7,
           },
         });
-
-        onMapReady?.(map);
-      });
-
-        map.on("click", (e) => {
-          const feats = map.queryRenderedFeatures(e.point);
-          // ignore clicks that hit our markers via DOM (markers handle their own clicks)
-          if (feats.some((f) => f.layer.id === "3d-buildings")) {
-            // building click → still treat as map click for adding pending
-          }
-          onMapClick?.(e.lngLat.lat, e.lngLat.lng);
-        });
       } catch (err) {
-        console.error("Map3D init failed", err);
-        setInitError(
-          err instanceof Error
-            ? `Не удалось запустить 3D-карту: ${err.message}`
-            : "Не удалось запустить 3D-карту.",
-        );
+        console.warn("[Map3D] route layers failed", err);
       }
-    })();
+
+      onMapReady?.(map);
+    });
+
+    map.on("click", (e) => {
+      onMapClick?.(e.lngLat.lat, e.lngLat.lng);
+    });
 
     return () => {
       cancelled = true;
@@ -534,6 +610,13 @@ export default function Map3D({
   return (
     <div className={cn("relative w-full h-full", className)}>
       <div ref={containerRef} className="absolute inset-0" />
+      {loading && !initError ? (
+        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-background/40">
+          <div className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground animate-pulse">
+            загружаю 3D-карту…
+          </div>
+        </div>
+      ) : null}
       {initError ? (
         <div className="absolute inset-0 z-10 flex items-center justify-center p-6 bg-background/80 backdrop-blur-sm">
           <div className="max-w-md text-center space-y-2">
